@@ -1,0 +1,984 @@
+{
+  "name": "Outbound Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Outbound Prospecting Pipeline\n\n**Purpose**: Automate outbound lead generation, enrichment, personalization, and multi-channel outreach\n\n**Flow Summary**:\n1. Manual trigger or watch target list in Google Sheets\n2. Scrape company data via Apify (news, contacts, tech stack)\n3. Enrich contacts with Clearbit/Apify\n4. Validate email and phone\n5. AI-generated personalized opening lines\n6. Deduplicate against HubSpot\n7. Add to outbound queue and Lemlist campaign\n8. Create LinkedIn connection tasks\n9. Handle replies and book meetings\n\n**Expected Target List**: company_domain, company_name, target_title, target_department",
+        "height": 420,
+        "width": 440
+      },
+      "id": "sticky_outbound_overview",
+      "name": "Pipeline Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute",
+              "minute": 5
+            }
+          ]
+        },
+        "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Target_Accounts",
+        "range": "A:H"
+      },
+      "id": "trigger_sheet_watch",
+      "name": "Watch Target List Sheet",
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 1,
+      "position": [
+        720,
+        340
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+          "name": "Google Sheets API"
+        }
+      },
+      "notes": "Monitors Target_Accounts sheet for new rows added by sales/marketing team"
+    },
+    {
+      "parameters": {
+        "content": "## Target List Trigger\n\nMonitors Google Sheets for new target accounts added by:\n- Sales team manual research\n- Marketing ICP list uploads\n- Partner referrals\n- Event attendee lists\n\n**Required columns**:\n- company_domain\n- company_name\n- target_title (e.g., 'VP Sales')\n- target_department\n- priority (High/Medium/Low)\n- campaign_name\n- assigned_rep",
+        "height": 280,
+        "width": 320
+      },
+      "id": "sticky_trigger",
+      "name": "Trigger Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        680,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.apify.com/v2/acts/{{CREDENTIAL_APIFY}}/runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "startUrls",
+              "value": "={{ [{ url: 'https://' + $json.company_domain }] }}"
+            },
+            {
+              "name": "scrapeNews",
+              "value": true
+            },
+            {
+              "name": "scrapeContacts",
+              "value": true
+            },
+            {
+              "name": "scrapeTechStack",
+              "value": true
+            },
+            {
+              "name": "targetTitle",
+              "value": "={{ $json.target_title }}"
+            }
+          ]
+        }
+      },
+      "id": "apify_target_scraper",
+      "name": "Apify Target Account Scraper",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        940,
+        340
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CREDENTIAL_APIFY}}",
+          "name": "Apify API"
+        }
+      },
+      "notes": "Apify actor: TargetAccountScraper - Scrapes company website, LinkedIn, news, contacts matching target title"
+    },
+    {
+      "parameters": {
+        "content": "## Target Account Intelligence\n\nApify scrapes multiple data sources:\n1. **Company website**: About, team, products\n2. **LinkedIn**: Company page, employee count, recent posts\n3. **News**: Recent funding, product launches, hiring\n4. **Contact discovery**: Finds emails/profiles matching target criteria\n5. **Tech stack**: Identifies technologies used\n\n**Actor**: TargetAccountScraper\n**Proxy**: Residential proxy pool for safety\n**Rate limit**: 50 companies/hour\n**Output**: Company profile + 5-10 target contacts per company",
+        "height": 320,
+        "width": 340
+      },
+      "id": "sticky_scraping",
+      "name": "Account Scraping Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        900,
+        580
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process Apify results and extract target contacts\nconst apifyResults = $input.first().json;\nconst targetList = $input.item.json;\n\nconst contacts = apifyResults.contacts || [];\n\n// Return array of contacts with company context\nreturn contacts.map(contact => ({\n  ...targetList,\n  contact_name: contact.name,\n  contact_email: contact.email,\n  contact_title: contact.title,\n  contact_linkedin: contact.linkedin_url,\n  contact_phone: contact.phone,\n  company_size: apifyResults.company_size,\n  company_industry: apifyResults.industry,\n  recent_news: apifyResults.recent_news,\n  tech_stack: apifyResults.technologies,\n  company_description: apifyResults.description,\n  scraped_at: new Date().toISOString()\n}));"
+      },
+      "id": "process_contacts",
+      "name": "Process Target Contacts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.clearbit.com/v2/combined/find",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "qs": {
+          "email": "={{ $json.contact_email }}"
+        }
+      },
+      "id": "clearbit_enrich",
+      "name": "Clearbit Enrichment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1340,
+        340
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CREDENTIAL_CLEARBIT}}",
+          "name": "Clearbit API"
+        }
+      },
+      "notes": "Enriches contact with Clearbit person + company data: role, seniority, social profiles, company metrics"
+    },
+    {
+      "parameters": {
+        "content": "## Contact Enrichment\n\nEnriches each discovered contact:\n- Clearbit person data (role, seniority)\n- Social media profiles\n- Employment history\n- Validated email format\n- Phone number (if available)\n- Timezone for send optimization\n\n**Fallback**: If Clearbit fails, use Apify secondary enrichment",
+        "height": 240,
+        "width": 300
+      },
+      "id": "sticky_enrichment_outbound",
+      "name": "Enrichment Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.emailvalidator.com/validate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{ $json.contact_email }}"
+            }
+          ]
+        }
+      },
+      "id": "validate_email_outbound",
+      "name": "Validate Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1540,
+        340
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CREDENTIAL_EMAIL_VALIDATOR}}",
+          "name": "Email Validator API"
+        }
+      },
+      "notes": "Validates email before sending outreach to avoid bounces"
+    },
+    {
+      "parameters": {
+        "url": "https://api.phonevalidator.com/validate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "phone",
+              "value": "={{ $json.contact_phone }}"
+            }
+          ]
+        }
+      },
+      "id": "validate_phone",
+      "name": "Validate Phone",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1540,
+        480
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CREDENTIAL_PHONE_VALIDATOR}}",
+          "name": "Phone Validator API"
+        }
+      },
+      "notes": "Validates phone number format and carrier info for SMS/call campaigns"
+    },
+    {
+      "parameters": {
+        "jsCode": "// AI Personalization Engine - Generate personalized opening line\nconst contact = $input.first().json;\n\n// In production, this would call OpenAI API\n// For now, generate template-based personalization\n\nconst personalizations = [];\n\n// News-based personalization\nif (contact.recent_news && contact.recent_news.length > 0) {\n  const latestNews = contact.recent_news[0];\n  personalizations.push(`I saw ${contact.company_name} recently ${latestNews.headline.toLowerCase()}`);\n}\n\n// Tech stack personalization\nif (contact.tech_stack && contact.tech_stack.includes('Salesforce')) {\n  personalizations.push(`I noticed you're using Salesforce and wanted to share how we help teams like yours`);\n}\n\n// Mutual connection (placeholder)\npersonalizations.push(`I saw you're connected with [mutual connection] on LinkedIn`);\n\n// Role-based\nif (contact.contact_title && contact.contact_title.includes('VP')) {\n  personalizations.push(`As VP, you're likely facing challenges with ${contact.target_department} efficiency`);\n}\n\n// Select best personalization\nconst openingLine = personalizations[0] || `I wanted to reach out about ${contact.company_name}'s growth`;\n\nreturn {\n  ...contact,\n  personalized_opener: openingLine,\n  personalization_score: personalizations.length * 20,\n  personalized_at: new Date().toISOString()\n};"
+      },
+      "id": "ai_personalize",
+      "name": "AI Personalization",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        340
+      ],
+      "notes": "Generate personalization using LLM - In production, call OpenAI API with company context, news, and contact profile"
+    },
+    {
+      "parameters": {
+        "content": "## AI Personalization\n\nGenerates personalized opening lines using:\n1. **Recent company news** (funding, launches, hiring)\n2. **Tech stack** (identify integration opportunities)\n3. **Mutual connections** (if available)\n4. **Role-specific pain points**\n5. **Company stage/size context**\n\n**In Production**: Call OpenAI GPT-4 API\n```\nPrompt: Generate 1-sentence personalized opener for [name] at [company] who is [title]. Context: [news + tech + pain points]\n```\n\n**Personalization Score**: Higher = more specific context available",
+        "height": 340,
+        "width": 360
+      },
+      "id": "sticky_personalization",
+      "name": "Personalization Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1700,
+        580
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "search",
+        "email": "={{ $json.contact_email }}",
+        "additionalFields": {}
+      },
+      "id": "check_hubspot_outbound",
+      "name": "Check HubSpot for Existing",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 1,
+      "position": [
+        1940,
+        340
+      ],
+      "credentials": {
+        "hubspotApi": {
+          "id": "{{CREDENTIAL_HUBSPOT}}",
+          "name": "HubSpot API"
+        }
+      },
+      "notes": "Check if contact already exists - if yes, update tags; if no, create new"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.exists_in_hubspot }}",
+              "value2": false
+            }
+          ]
+        }
+      },
+      "id": "if_new_contact",
+      "name": "Is New Contact?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2140,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "create",
+        "email": "={{ $json.contact_email }}",
+        "additionalFields": {
+          "firstname": "={{ $json.contact_name.split(' ')[0] }}",
+          "lastname": "={{ $json.contact_name.split(' ').slice(1).join(' ') }}",
+          "company": "={{ $json.company_name }}",
+          "jobtitle": "={{ $json.contact_title }}",
+          "phone": "={{ $json.contact_phone }}",
+          "linkedin": "={{ $json.contact_linkedin }}",
+          "lead_source": "outbound",
+          "campaign_name": "={{ $json.campaign_name }}",
+          "hs_lead_status": "Outbound Prospect",
+          "personalization_note": "={{ $json.personalized_opener }}"
+        }
+      },
+      "id": "hubspot_create_outbound",
+      "name": "Create HubSpot Contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 1,
+      "position": [
+        2340,
+        240
+      ],
+      "credentials": {
+        "hubspotApi": {
+          "id": "{{CREDENTIAL_HUBSPOT}}",
+          "name": "HubSpot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "contactId": "={{ $json.hubspot_contact_id }}",
+        "updateFields": {
+          "last_outbound_touch": "={{ new Date().toISOString() }}",
+          "outbound_campaign": "={{ $json.campaign_name }}",
+          "outbound_sequence_status": "active"
+        }
+      },
+      "id": "hubspot_update_existing",
+      "name": "Update Existing Contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 1,
+      "position": [
+        2340,
+        440
+      ],
+      "credentials": {
+        "hubspotApi": {
+          "id": "{{CREDENTIAL_HUBSPOT}}",
+          "name": "HubSpot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Deduplication & HubSpot Sync\n\n**Logic**:\n1. Check HubSpot by email\n2. If exists: Update tags + last touch date\n3. If new: Create with full enriched data\n\n**Tags added**:\n- source: outbound\n- campaign: [campaign_name]\n- status: Outbound Prospect\n- assigned_rep: [rep_name]\n\n**Prevents**:\n- Duplicate outreach\n- Contacting existing customers\n- Spamming same prospect",
+        "height": 280,
+        "width": 320
+      },
+      "id": "sticky_dedupe_outbound",
+      "name": "Dedupe Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2300,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "append",
+        "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Outbound_Queue",
+        "range": "A:P",
+        "options": {}
+      },
+      "id": "sheets_outbound_queue",
+      "name": "Add to Outbound Queue Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [
+        2540,
+        340
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+          "name": "Google Sheets API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "addRecipient",
+        "campaignId": "={{ $json.campaign_name }}",
+        "email": "={{ $json.contact_email }}",
+        "additionalFields": {
+          "firstName": "={{ $json.contact_name.split(' ')[0] }}",
+          "lastName": "={{ $json.contact_name.split(' ').slice(1).join(' ') }}",
+          "companyName": "={{ $json.company_name }}",
+          "customFields": {
+            "jobTitle": "={{ $json.contact_title }}",
+            "personalization": "={{ $json.personalized_opener }}",
+            "recentNews": "={{ $json.recent_news[0].headline }}",
+            "techStack": "={{ $json.tech_stack.join(', ') }}"
+          }
+        }
+      },
+      "id": "lemlist_add_outbound",
+      "name": "Add to Lemlist Campaign",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        2740,
+        340
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CREDENTIAL_LEMLIST}}",
+          "name": "Lemlist API"
+        }
+      },
+      "notes": "Adds contact to Lemlist outbound sequence with personalized variables"
+    },
+    {
+      "parameters": {
+        "content": "## Lemlist Outreach Sequence\n\nEnrolls contact in multi-touch campaign:\n- **Day 0**: Initial personalized email\n- **Day 3**: Follow-up (if no reply)\n- **Day 7**: Value-add content\n- **Day 14**: Break-up email\n\n**Personalization variables**:\n- {{firstName}}\n- {{companyName}}\n- {{personalization}} (AI-generated opener)\n- {{recentNews}}\n- {{techStack}}\n\n**Auto-pause on**: Reply, out-of-office, bounce\n**Tracking**: Opens, clicks, replies",
+        "height": 320,
+        "width": 340
+      },
+      "id": "sticky_lemlist",
+      "name": "Lemlist Sequence Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2700,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "task",
+        "operation": "create",
+        "associatedWith": "contact",
+        "contactId": "={{ $json.hubspot_contact_id }}",
+        "subject": "Send LinkedIn Connection Request",
+        "taskType": "TODO",
+        "body": "Send personalized LinkedIn connection request to ={{ $json.contact_name }} (={{ $json.contact_title }} at ={{ $json.company_name }}).\n\nLinkedIn: ={{ $json.contact_linkedin }}\n\nSuggested message:\n'Hi ={{ $json.contact_name.split(' ')[0] }}, ={{ $json.personalized_opener }}. I'd love to connect and share some insights relevant to ={{ $json.company_name }}.'",
+        "dueDate": "={{ $now.plus(1, 'days').toISO() }}",
+        "ownerId": "={{ $json.assigned_rep_id }}"
+      },
+      "id": "hubspot_linkedin_task",
+      "name": "Create LinkedIn Task",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 1,
+      "position": [
+        2940,
+        340
+      ],
+      "credentials": {
+        "hubspotApi": {
+          "id": "{{CREDENTIAL_HUBSPOT}}",
+          "name": "HubSpot API"
+        }
+      },
+      "notes": "Creates task for sales rep to send LinkedIn connection request"
+    },
+    {
+      "parameters": {
+        "content": "## LinkedIn Multi-Channel Strategy\n\nCreates task for rep to:\n1. Send personalized connection request\n2. Engage with prospect's content\n3. Send follow-up message after connection\n\n**Timing**: 1-2 days after email sequence starts\n**Assignment**: Automatically assigned to campaign owner\n**Template**: Pre-written message with personalization\n\n**Best Practice**: Human sends LinkedIn connections (not automated) to avoid account restrictions",
+        "height": 280,
+        "width": 320
+      },
+      "id": "sticky_linkedin_task",
+      "name": "LinkedIn Task Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2900,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lemlist-reply-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook_reply",
+      "name": "Lemlist Reply Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        3140,
+        340
+      ],
+      "webhookId": "lemlist-reply-handler",
+      "notes": "Receives webhook from Lemlist when prospect replies to outreach email"
+    },
+    {
+      "parameters": {
+        "content": "## Reply Handling\n\nWhen prospect replies:\n1. **Immediately**: Pause Lemlist sequence\n2. **Notify**: Alert assigned rep via Teams\n3. **HubSpot**: Update stage to 'In Conversation'\n4. **Intent Detection**: Analyze reply for buying signals\n5. **Auto-action**: If high intent detected, offer calendar booking\n\n**Intent signals**:\n- Asking about pricing\n- Requesting demo\n- Questions about features\n- Timeline mentioned\n- Budget discussed",
+        "height": 280,
+        "width": 320
+      },
+      "id": "sticky_reply_handling",
+      "name": "Reply Handler Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3100,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "pauseRecipient",
+        "campaignId": "={{ $json.campaignId }}",
+        "email": "={{ $json.email }}"
+      },
+      "id": "lemlist_pause",
+      "name": "Pause Lemlist Sequence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        3340,
+        340
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CREDENTIAL_LEMLIST}}",
+          "name": "Lemlist API"
+        }
+      },
+      "notes": "Pauses sequence immediately when reply detected to prevent further automated emails"
+    },
+    {
+      "parameters": {
+        "url": "https://graph.microsoft.com/v1.0/teams/{{CREDENTIAL_TEAMS}}/channels/outbound-replies/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "body",
+              "value": "={{ {\n  \"body\": {\n    \"content\": \"\u2709\ufe0f Reply from Prospect!\\n\\n\ud83d\udc64 \" + $json.contact_name + \" (\" + $json.company_name + \")\\n\ud83d\udce7 \" + $json.email + \"\\n\\nReply preview: \" + $json.reply_text.substring(0, 200) + \"...\\n\\n\ud83d\udd17 View in HubSpot: [Contact Link]\\n\\n@\" + $json.assigned_rep + \" - This is your lead!\"\n  }\n} }}"
+            }
+          ]
+        }
+      },
+      "id": "teams_notify_reply",
+      "name": "Notify Rep on Teams",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        3540,
+        340
+      ],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "{{CREDENTIAL_TEAMS}}",
+          "name": "Microsoft Teams API"
+        }
+      },
+      "notes": "Sends immediate Teams notification to assigned rep with reply preview"
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "contactId": "={{ $json.hubspot_contact_id }}",
+        "updateFields": {
+          "hs_lead_status": "In Conversation",
+          "last_reply_date": "={{ new Date().toISOString() }}",
+          "reply_count": "={{ ($json.reply_count || 0) + 1 }}"
+        }
+      },
+      "id": "hubspot_update_stage",
+      "name": "Update HubSpot Stage",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 1,
+      "position": [
+        3740,
+        340
+      ],
+      "credentials": {
+        "hubspotApi": {
+          "id": "{{CREDENTIAL_HUBSPOT}}",
+          "name": "HubSpot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Intent detection - analyze reply for buying signals\nconst reply = $input.first().json.reply_text.toLowerCase();\n\nconst intentKeywords = {\n  high: ['demo', 'pricing', 'price', 'cost', 'budget', 'buy', 'purchase', 'interested', 'calendar', 'meeting', 'call', 'when can', 'next steps'],\n  medium: ['tell me more', 'learn more', 'information', 'how does', 'can you', 'would like to know'],\n  low: ['thanks', 'thank you', 'interesting', 'maybe', 'later', 'not right now']\n};\n\nlet intentLevel = 'low';\nlet intentScore = 0;\n\nfor (const keyword of intentKeywords.high) {\n  if (reply.includes(keyword)) {\n    intentScore += 10;\n    intentLevel = 'high';\n  }\n}\n\nfor (const keyword of intentKeywords.medium) {\n  if (reply.includes(keyword)) {\n    intentScore += 5;\n    if (intentLevel === 'low') intentLevel = 'medium';\n  }\n}\n\nreturn {\n  ...$input.first().json,\n  intent_level: intentLevel,\n  intent_score: intentScore,\n  should_book_meeting: intentScore >= 20\n};"
+      },
+      "id": "detect_intent",
+      "name": "Detect Intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3940,
+        340
+      ],
+      "notes": "Analyzes reply text for buying intent signals and determines if meeting booking should be offered"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.should_book_meeting }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if_high_intent",
+      "name": "High Intent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        4140,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "Re: ={{ $json.original_subject }}",
+        "message": "Hi ={{ $json.contact_name.split(' ')[0] }},\n\nGreat to hear from you! I'd love to show you how we can help ={{ $json.company_name }}.\n\nYou can book a time that works for you here: [Calendar Link]\n\nOr reply with your availability and I'll send over some times.\n\nLooking forward to speaking!\n\nBest,\n[Rep Name]",
+        "options": {
+          "senderName": "={{ $json.assigned_rep }}"
+        }
+      },
+      "id": "gmail_booking_offer",
+      "name": "Send Booking Link (Gmail)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 1,
+      "position": [
+        4340,
+        240
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "{{CREDENTIAL_GMAIL}}",
+          "name": "Gmail OAuth2"
+        }
+      },
+      "notes": "Sends meeting booking link when high intent detected"
+    },
+    {
+      "parameters": {
+        "content": "## Rate Limiting & Safe Scraping\n\n**Apify Best Practices**:\n- Use residential proxy pools\n- Rotate user agents\n- Add random delays (2-5s between requests)\n- Respect robots.txt\n- Max 50 companies/hour\n\n**Rate Limits**:\n- Apify: 100 concurrent runs\n- Clearbit: 600 req/min\n- Email validator: 50 req/min\n- Lemlist: 100 recipients/campaign/day\n\n**Retry Logic**:\n- 429 (rate limit): Exponential backoff\n- 5xx errors: Retry 3x with 1min delay\n- Network errors: Retry 2x immediately\n\n**Pagination**: Process in batches of 10 contacts to avoid timeouts",
+        "height": 380,
+        "width": 400
+      },
+      "id": "sticky_rate_limits",
+      "name": "Rate Limiting & Safety Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1140,
+        880
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        },
+        "resume": "webhook",
+        "maxRetries": 3,
+        "retryInterval": 300
+      },
+      "id": "error_handler_outbound",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        720,
+        880
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "append",
+        "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Error_Log",
+        "range": "A:G",
+        "options": {}
+      },
+      "id": "log_error_outbound",
+      "name": "Log Error to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [
+        920,
+        880
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+          "name": "Google Sheets API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Watch Target List Sheet": {
+      "main": [
+        [
+          {
+            "node": "Apify Target Account Scraper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apify Target Account Scraper": {
+      "main": [
+        [
+          {
+            "node": "Process Target Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Target Contacts": {
+      "main": [
+        [
+          {
+            "node": "Clearbit Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clearbit Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Validate Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Validate Phone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Email": {
+      "main": [
+        [
+          {
+            "node": "AI Personalization",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Phone": {
+      "main": [
+        [
+          {
+            "node": "AI Personalization",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Personalization": {
+      "main": [
+        [
+          {
+            "node": "Check HubSpot for Existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check HubSpot for Existing": {
+      "main": [
+        [
+          {
+            "node": "Is New Contact?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is New Contact?": {
+      "main": [
+        [
+          {
+            "node": "Create HubSpot Contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Existing Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create HubSpot Contact": {
+      "main": [
+        [
+          {
+            "node": "Add to Outbound Queue Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Existing Contact": {
+      "main": [
+        [
+          {
+            "node": "Add to Outbound Queue Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Outbound Queue Sheet": {
+      "main": [
+        [
+          {
+            "node": "Add to Lemlist Campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Lemlist Campaign": {
+      "main": [
+        [
+          {
+            "node": "Create LinkedIn Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lemlist Reply Webhook": {
+      "main": [
+        [
+          {
+            "node": "Pause Lemlist Sequence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pause Lemlist Sequence": {
+      "main": [
+        [
+          {
+            "node": "Notify Rep on Teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Rep on Teams": {
+      "main": [
+        [
+          {
+            "node": "Update HubSpot Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update HubSpot Stage": {
+      "main": [
+        [
+          {
+            "node": "Detect Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Intent": {
+      "main": [
+        [
+          {
+            "node": "High Intent?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "High Intent?": {
+      "main": [
+        [
+          {
+            "node": "Send Booking Link (Gmail)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Handler": {
+      "main": [
+        [
+          {
+            "node": "Log Error to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "id": "outbound_pipeline_001",
+  "tags": [
+    {
+      "name": "GTM",
+      "id": "gtm_tag"
+    },
+    {
+      "name": "Outbound",
+      "id": "outbound_tag"
+    }
+  ]
+}
