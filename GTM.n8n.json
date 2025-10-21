@@ -1,0 +1,3262 @@
+{
+  "meta": {
+    "source": "GTM Engineer Complete Automation Suite",
+    "exportedAt": "2025-10-21T05:27:22.593Z",
+    "version": "1"
+  },
+  "credentials": [],
+  "workflows": [
+    {
+      "name": "Inbound Pipeline",
+      "nodes": [
+        {
+          "parameters": {
+            "content": "## Inbound Lead Pipeline\n\n**Purpose**: Automate inbound lead capture, enrichment, scoring, and routing\n\n**Flow Summary**:\n1. Webhook receives form submission\n2. Store raw lead in Google Sheets\n3. Enrich with Apify (company + contact data)\n4. Validate email and LinkedIn\n5. Score lead against ICP criteria\n6. Deduplicate against existing records\n7. Route MQLs to sales (HubSpot + Teams + Lemlist)\n8. Route nurture leads to drip campaign\n\n**Expected Fields**: name, email, company, job_title, source, page_url",
+            "height": 380,
+            "width": 420
+          },
+          "id": "sticky_inbound_overview",
+          "name": "Pipeline Overview",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            240,
+            240
+          ]
+        },
+        {
+          "parameters": {
+            "httpMethod": "POST",
+            "path": "inbound-lead",
+            "responseMode": "responseNode",
+            "options": {}
+          },
+          "id": "webhook_inbound",
+          "name": "Inbound Lead Webhook",
+          "type": "n8n-nodes-base.webhook",
+          "typeVersion": 1,
+          "position": [
+            720,
+            340
+          ],
+          "webhookId": "inbound-lead-capture"
+        },
+        {
+          "parameters": {
+            "content": "## Webhook Trigger\n\nCaptures form submissions from website, landing pages, or lead magnets.\n\n**Expected payload**:\n- name\n- email\n- company\n- job_title\n- phone (optional)\n- source (e.g., 'website', 'webinar')\n- page_url\n- utm_source, utm_campaign (optional)",
+            "height": 260,
+            "width": 300
+          },
+          "id": "sticky_webhook",
+          "name": "Webhook Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            680,
+            480
+          ]
+        },
+        {
+          "parameters": {
+            "respondWith": "json",
+            "responseBody": "={{ { \"success\": true, \"message\": \"Lead received\", \"lead_id\": $json.email } }}"
+          },
+          "id": "webhook_response",
+          "name": "Webhook Response",
+          "type": "n8n-nodes-base.respondToWebhook",
+          "typeVersion": 1,
+          "position": [
+            920,
+            340
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Raw_Leads",
+            "range": "A:K",
+            "options": {
+              "valueInputMode": "USER_ENTERED"
+            }
+          },
+          "id": "sheets_raw_lead",
+          "name": "Save Raw Lead to Sheets",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            1120,
+            340
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "content": "## Raw Lead Storage\n\nWrite every lead to Google Sheets immediately for:\n- Audit trail\n- Recovery in case of pipeline failures\n- Historical analysis\n\n**Sheet**: Raw_Leads\n**Columns**: timestamp, name, email, company, job_title, phone, source, page_url, utm_source, utm_campaign, raw_json",
+            "height": 240,
+            "width": 300
+          },
+          "id": "sticky_raw_storage",
+          "name": "Raw Storage Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1080,
+            480
+          ]
+        },
+        {
+          "parameters": {
+            "url": "https://api.apify.com/v2/acts/{{CREDENTIAL_APIFY}}/runs",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "email",
+                  "value": "={{ $json.email }}"
+                },
+                {
+                  "name": "company",
+                  "value": "={{ $json.company }}"
+                },
+                {
+                  "name": "name",
+                  "value": "={{ $json.name }}"
+                }
+              ]
+            },
+            "options": {
+              "timeout": 30000
+            }
+          },
+          "id": "apify_enrich",
+          "name": "Apify Contact Enrichment",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            1320,
+            340
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_APIFY}}",
+              "name": "Apify API"
+            }
+          },
+          "notes": "Apify actor: CompanyContactEnricher - Enriches contact with company size, industry, technologies, social profiles, verified contact info"
+        },
+        {
+          "parameters": {
+            "content": "## Enrichment via Apify\n\nCalls Apify actor to enrich lead data:\n- Company info (size, industry, revenue)\n- Verified email format\n- LinkedIn profile URL\n- Phone number\n- Job title normalization\n- Technology stack\n- Company funding/growth signals\n\n**Actor**: CompanyContactEnricher\n**Rate Limit**: 100 req/min\n**Retry**: 3 attempts with exponential backoff",
+            "height": 280,
+            "width": 320
+          },
+          "id": "sticky_enrichment",
+          "name": "Enrichment Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1280,
+            500
+          ]
+        },
+        {
+          "parameters": {
+            "jsCode": "// Merge original lead data with Apify enrichment results\nconst originalLead = $input.first().json;\nconst enrichmentData = $input.last().json;\n\nreturn {\n  ...originalLead,\n  enriched_email: enrichmentData.email_verified || originalLead.email,\n  company_size: enrichmentData.company_size,\n  company_industry: enrichmentData.industry,\n  company_revenue: enrichmentData.revenue_range,\n  linkedin_url: enrichmentData.linkedin_url,\n  phone: enrichmentData.phone || originalLead.phone,\n  job_level: enrichmentData.job_level,\n  technologies: enrichmentData.tech_stack,\n  funding_stage: enrichmentData.funding,\n  enrichment_timestamp: new Date().toISOString()\n};"
+          },
+          "id": "merge_enrichment",
+          "name": "Merge Enrichment Data",
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2,
+          "position": [
+            1520,
+            340
+          ]
+        },
+        {
+          "parameters": {
+            "url": "https://api.emailvalidator.com/validate",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "email",
+                  "value": "={{ $json.enriched_email }}"
+                }
+              ]
+            }
+          },
+          "id": "validate_email",
+          "name": "Validate Email",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            1720,
+            340
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_EMAIL_VALIDATOR}}",
+              "name": "Email Validator API"
+            }
+          },
+          "notes": "Validates email deliverability, checks for disposable domains, validates MX records"
+        },
+        {
+          "parameters": {
+            "content": "## Email Validation\n\nValidates email address quality:\n- Syntax validation\n- Domain MX record check\n- Disposable email detection\n- Catch-all detection\n- Deliverability score\n\n**Sets field**: email_valid (true/false)\n**Threshold**: Accept if score > 0.7",
+            "height": 220,
+            "width": 280
+          },
+          "id": "sticky_email_validation",
+          "name": "Email Validation Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1680,
+            480
+          ]
+        },
+        {
+          "parameters": {
+            "url": "https://api.linkedinvalidator.com/check",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "linkedin_url",
+                  "value": "={{ $json.linkedin_url }}"
+                }
+              ]
+            }
+          },
+          "id": "validate_linkedin",
+          "name": "Validate LinkedIn",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            1920,
+            340
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_LINKEDIN_VALIDATOR}}",
+              "name": "LinkedIn Validator API"
+            }
+          },
+          "notes": "Validates LinkedIn URL exists and is active, extracts profile completeness score"
+        },
+        {
+          "parameters": {
+            "jsCode": "// Lead Scoring Engine - Scores based on ICP fit + engagement\nconst lead = $input.first().json;\n\nlet score = 0;\n\n// Company size scoring (0-25 points)\nconst sizeMap = {\n  '1-10': 5,\n  '11-50': 10,\n  '51-200': 20,\n  '201-1000': 25,\n  '1001+': 20\n};\nscore += sizeMap[lead.company_size] || 0;\n\n// Industry fit (0-20 points)\nconst targetIndustries = ['Software', 'Technology', 'SaaS', 'Finance', 'Healthcare'];\nif (targetIndustries.includes(lead.company_industry)) score += 20;\n\n// Job level scoring (0-25 points)\nconst levelMap = {\n  'C-Level': 25,\n  'VP': 20,\n  'Director': 15,\n  'Manager': 10,\n  'Individual Contributor': 5\n};\nscore += levelMap[lead.job_level] || 0;\n\n// Data quality (0-15 points)\nif (lead.email_valid) score += 5;\nif (lead.linkedin_url && lead.linkedin_valid) score += 5;\nif (lead.phone) score += 5;\n\n// Intent signals (0-15 points)\nconst highIntentSources = ['demo_request', 'pricing_page', 'contact_sales'];\nif (highIntentSources.includes(lead.source)) score += 15;\nelse if (lead.source === 'webinar') score += 10;\nelse score += 5;\n\n// Assign tier\nlet tier = 'Low';\nif (score >= 70) tier = 'Hot';\nelse if (score >= 50) tier = 'MQL';\nelse if (score >= 30) tier = 'Nurture';\n\nreturn {\n  ...lead,\n  lead_score: score,\n  lead_tier: tier,\n  is_mql: score >= 50,\n  scored_at: new Date().toISOString()\n};"
+          },
+          "id": "score_lead",
+          "name": "Score Lead",
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2,
+          "position": [
+            2120,
+            340
+          ]
+        },
+        {
+          "parameters": {
+            "content": "## Lead Scoring\n\nScores lead based on:\n1. **Company Fit** (45 pts max)\n   - Size: 0-25 pts\n   - Industry: 0-20 pts\n\n2. **Contact Quality** (40 pts max)\n   - Job Level: 0-25 pts\n   - Data completeness: 0-15 pts\n\n3. **Intent Signals** (15 pts max)\n   - Source/behavior: 0-15 pts\n\n**Tiers**:\n- Hot: 70+\n- MQL: 50-69\n- Nurture: 30-49\n- Low: <30",
+            "height": 300,
+            "width": 300
+          },
+          "id": "sticky_scoring",
+          "name": "Scoring Logic Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            2080,
+            520
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "lookup",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Raw_Leads",
+            "range": "B:B",
+            "lookupColumn": "email",
+            "lookupValue": "={{ $json.enriched_email }}"
+          },
+          "id": "check_sheets_dupe",
+          "name": "Check Sheets for Duplicate",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            2320,
+            340
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          },
+          "notes": "Lookup existing email in sheets to prevent duplicates"
+        },
+        {
+          "parameters": {
+            "resource": "contact",
+            "operation": "search",
+            "email": "={{ $json.enriched_email }}",
+            "additionalFields": {}
+          },
+          "id": "check_hubspot_dupe",
+          "name": "Check HubSpot for Duplicate",
+          "type": "n8n-nodes-base.hubspot",
+          "typeVersion": 1,
+          "position": [
+            2320,
+            480
+          ],
+          "credentials": {
+            "hubspotApi": {
+              "id": "{{CREDENTIAL_HUBSPOT}}",
+              "name": "HubSpot API"
+            }
+          },
+          "notes": "Search HubSpot for existing contact by email"
+        },
+        {
+          "parameters": {
+            "content": "## Deduplication\n\nPrevents duplicate processing:\n1. Check Google Sheets for email\n2. Check HubSpot for existing contact\n3. If found: Update record + merge data\n4. If new: Proceed to create\n\n**Matching criteria**:\n- Email (primary)\n- Company domain\n- Phone number (secondary)",
+            "height": 220,
+            "width": 300
+          },
+          "id": "sticky_dedup",
+          "name": "Deduplication Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            2280,
+            620
+          ]
+        },
+        {
+          "parameters": {
+            "conditions": {
+              "boolean": [
+                {
+                  "value1": "={{ $json.is_mql }}",
+                  "value2": true
+                }
+              ]
+            }
+          },
+          "id": "if_mql",
+          "name": "Is MQL?",
+          "type": "n8n-nodes-base.if",
+          "typeVersion": 1,
+          "position": [
+            2520,
+            340
+          ]
+        },
+        {
+          "parameters": {
+            "resource": "contact",
+            "operation": "upsert",
+            "email": "={{ $json.enriched_email }}",
+            "additionalFields": {
+              "firstname": "={{ $json.name.split(' ')[0] }}",
+              "lastname": "={{ $json.name.split(' ').slice(1).join(' ') }}",
+              "company": "={{ $json.company }}",
+              "jobtitle": "={{ $json.job_title }}",
+              "phone": "={{ $json.phone }}",
+              "linkedin": "={{ $json.linkedin_url }}",
+              "lead_score": "={{ $json.lead_score }}",
+              "lead_tier": "={{ $json.lead_tier }}",
+              "lead_source": "={{ $json.source }}",
+              "hs_lead_status": "MQL"
+            }
+          },
+          "id": "hubspot_create_mql",
+          "name": "Create/Update HubSpot Contact (MQL)",
+          "type": "n8n-nodes-base.hubspot",
+          "typeVersion": 1,
+          "position": [
+            2720,
+            240
+          ],
+          "credentials": {
+            "hubspotApi": {
+              "id": "{{CREDENTIAL_HUBSPOT}}",
+              "name": "HubSpot API"
+            }
+          },
+          "notes": "Creates or updates contact in HubSpot with MQL status and enriched data"
+        },
+        {
+          "parameters": {
+            "content": "## MQL Path\n\nFor qualified leads (score ≥50):\n1. Create/update in HubSpot as MQL\n2. Add to MQLs tracking sheet\n3. Notify sales team via Teams\n4. Enroll in Lemlist outreach sequence\n5. Create follow-up task for rep\n\n**SLA**: Sales contacted within 1 hour",
+            "height": 220,
+            "width": 300
+          },
+          "id": "sticky_mql_path",
+          "name": "MQL Path Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            2680,
+            60
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/MQLs",
+            "range": "A:M",
+            "options": {}
+          },
+          "id": "sheets_add_mql",
+          "name": "Add to MQL Sheet",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            2920,
+            240
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "url": "https://graph.microsoft.com/v1.0/teams/{{CREDENTIAL_TEAMS}}/channels/inbound-mqls/messages",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "oAuth2Api",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "body",
+                  "value": "={{ {\n  \"body\": {\n    \"content\": \"🔥 New MQL: \" + $json.name + \" from \" + $json.company + \"\\n\\nScore: \" + $json.lead_score + \" (\" + $json.lead_tier + \")\\nEmail: \" + $json.enriched_email + \"\\nTitle: \" + $json.job_title + \"\\nSource: \" + $json.source + \"\\n\\nView in HubSpot: [Contact Link]\"\n  }\n} }}"
+                }
+              ]
+            }
+          },
+          "id": "teams_notify_mql",
+          "name": "Notify Sales Team (Teams)",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            3120,
+            240
+          ],
+          "credentials": {
+            "oAuth2Api": {
+              "id": "{{CREDENTIAL_TEAMS}}",
+              "name": "Microsoft Teams API"
+            }
+          },
+          "notes": "Sends MQL notification to sales team channel in Microsoft Teams"
+        },
+        {
+          "parameters": {
+            "operation": "addRecipient",
+            "campaignId": "inbound_mql_sequence",
+            "email": "={{ $json.enriched_email }}",
+            "additionalFields": {
+              "firstName": "={{ $json.name.split(' ')[0] }}",
+              "lastName": "={{ $json.name.split(' ').slice(1).join(' ') }}",
+              "companyName": "={{ $json.company }}",
+              "customFields": {
+                "jobTitle": "={{ $json.job_title }}",
+                "leadScore": "={{ $json.lead_score }}",
+                "source": "={{ $json.source }}"
+              }
+            }
+          },
+          "id": "lemlist_enroll_mql",
+          "name": "Enroll in Lemlist Sequence",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            3320,
+            240
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_LEMLIST}}",
+              "name": "Lemlist API"
+            }
+          },
+          "notes": "Adds contact to Lemlist outreach campaign for automated follow-up"
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Nurture_Queue",
+            "range": "A:M",
+            "options": {}
+          },
+          "id": "sheets_add_nurture",
+          "name": "Add to Nurture Sheet",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            2720,
+            440
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "content": "## Nurture Path\n\nFor lower-scored leads (30-49):\n1. Add to nurture tracking sheet\n2. Start automated email drip via Gmail\n3. Re-score after engagement\n4. Upgrade to MQL if score increases\n\n**Cadence**: Weekly educational content",
+            "height": 200,
+            "width": 280
+          },
+          "id": "sticky_nurture_path",
+          "name": "Nurture Path Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            2680,
+            580
+          ]
+        },
+        {
+          "parameters": {
+            "sendTo": "={{ $json.enriched_email }}",
+            "subject": "Welcome! Here's what you need to know",
+            "message": "Hi ={{ $json.name.split(' ')[0] }},\n\nThanks for your interest in our solution. Based on your role at ={{ $json.company }}, I thought you'd find these resources helpful...",
+            "options": {
+              "senderName": "Growth Team"
+            }
+          },
+          "id": "gmail_nurture_email",
+          "name": "Send Nurture Email (Gmail)",
+          "type": "n8n-nodes-base.gmail",
+          "typeVersion": 1,
+          "position": [
+            2920,
+            440
+          ],
+          "credentials": {
+            "gmailOAuth2": {
+              "id": "{{CREDENTIAL_GMAIL}}",
+              "name": "Gmail OAuth2"
+            }
+          },
+          "notes": "Sends initial nurture email from company Gmail account"
+        },
+        {
+          "parameters": {
+            "rule": {
+              "interval": [
+                {
+                  "field": "hours",
+                  "hoursInterval": 1
+                }
+              ]
+            },
+            "resume": "webhook",
+            "maxRetries": 3,
+            "retryInterval": 300
+          },
+          "id": "error_handler",
+          "name": "Error Handler",
+          "type": "n8n-nodes-base.errorTrigger",
+          "typeVersion": 1,
+          "position": [
+            1120,
+            640
+          ]
+        },
+        {
+          "parameters": {
+            "content": "## Error Handling\n\n**Strategy**: Exponential backoff retry\n- 1st retry: 5 min delay\n- 2nd retry: 15 min delay\n- 3rd retry: 1 hour delay\n\n**Rate Limit Handling**:\n- Apify: 100 req/min → queue\n- Email validator: 50 req/min\n- HubSpot: 100 req/10s\n\n**Failure Actions**:\n- Log to error sheet\n- Notify ops team\n- Queue for manual review",
+            "height": 280,
+            "width": 320
+          },
+          "id": "sticky_error_handling",
+          "name": "Error Handling Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1080,
+            840
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Error_Log",
+            "range": "A:F",
+            "options": {}
+          },
+          "id": "log_error",
+          "name": "Log Error to Sheet",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            1320,
+            640
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          }
+        }
+      ],
+      "connections": {
+        "Inbound Lead Webhook": {
+          "main": [
+            [
+              {
+                "node": "Webhook Response",
+                "type": "main",
+                "index": 0
+              },
+              {
+                "node": "Save Raw Lead to Sheets",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Save Raw Lead to Sheets": {
+          "main": [
+            [
+              {
+                "node": "Apify Contact Enrichment",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Apify Contact Enrichment": {
+          "main": [
+            [
+              {
+                "node": "Merge Enrichment Data",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Merge Enrichment Data": {
+          "main": [
+            [
+              {
+                "node": "Validate Email",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Validate Email": {
+          "main": [
+            [
+              {
+                "node": "Validate LinkedIn",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Validate LinkedIn": {
+          "main": [
+            [
+              {
+                "node": "Score Lead",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Score Lead": {
+          "main": [
+            [
+              {
+                "node": "Check Sheets for Duplicate",
+                "type": "main",
+                "index": 0
+              },
+              {
+                "node": "Check HubSpot for Duplicate",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Check Sheets for Duplicate": {
+          "main": [
+            [
+              {
+                "node": "Is MQL?",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Check HubSpot for Duplicate": {
+          "main": [
+            [
+              {
+                "node": "Is MQL?",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Is MQL?": {
+          "main": [
+            [
+              {
+                "node": "Create/Update HubSpot Contact (MQL)",
+                "type": "main",
+                "index": 0
+              }
+            ],
+            [
+              {
+                "node": "Add to Nurture Sheet",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Create/Update HubSpot Contact (MQL)": {
+          "main": [
+            [
+              {
+                "node": "Add to MQL Sheet",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Add to MQL Sheet": {
+          "main": [
+            [
+              {
+                "node": "Notify Sales Team (Teams)",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Notify Sales Team (Teams)": {
+          "main": [
+            [
+              {
+                "node": "Enroll in Lemlist Sequence",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Add to Nurture Sheet": {
+          "main": [
+            [
+              {
+                "node": "Send Nurture Email (Gmail)",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Error Handler": {
+          "main": [
+            [
+              {
+                "node": "Log Error to Sheet",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        }
+      },
+      "active": false,
+      "settings": {
+        "executionOrder": "v1"
+      },
+      "versionId": "1",
+      "id": "inbound_pipeline_001",
+      "tags": [
+        {
+          "name": "GTM",
+          "id": "gtm_tag"
+        },
+        {
+          "name": "Inbound",
+          "id": "inbound_tag"
+        }
+      ]
+    },
+    {
+      "name": "Outbound Pipeline",
+      "nodes": [
+        {
+          "parameters": {
+            "content": "## Outbound Prospecting Pipeline\n\n**Purpose**: Automate outbound lead generation, enrichment, personalization, and multi-channel outreach\n\n**Flow Summary**:\n1. Manual trigger or watch target list in Google Sheets\n2. Scrape company data via Apify (news, contacts, tech stack)\n3. Enrich contacts with Clearbit/Apify\n4. Validate email and phone\n5. AI-generated personalized opening lines\n6. Deduplicate against HubSpot\n7. Add to outbound queue and Lemlist campaign\n8. Create LinkedIn connection tasks\n9. Handle replies and book meetings\n\n**Expected Target List**: company_domain, company_name, target_title, target_department",
+            "height": 420,
+            "width": 440
+          },
+          "id": "sticky_outbound_overview",
+          "name": "Pipeline Overview",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            240,
+            240
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "pollTimes": {
+              "item": [
+                {
+                  "mode": "everyMinute",
+                  "minute": 5
+                }
+              ]
+            },
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Target_Accounts",
+            "range": "A:H"
+          },
+          "id": "trigger_sheet_watch",
+          "name": "Watch Target List Sheet",
+          "type": "n8n-nodes-base.googleSheetsTrigger",
+          "typeVersion": 1,
+          "position": [
+            720,
+            340
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          },
+          "notes": "Monitors Target_Accounts sheet for new rows added by sales/marketing team"
+        },
+        {
+          "parameters": {
+            "content": "## Target List Trigger\n\nMonitors Google Sheets for new target accounts added by:\n- Sales team manual research\n- Marketing ICP list uploads\n- Partner referrals\n- Event attendee lists\n\n**Required columns**:\n- company_domain\n- company_name\n- target_title (e.g., 'VP Sales')\n- target_department\n- priority (High/Medium/Low)\n- campaign_name\n- assigned_rep",
+            "height": 280,
+            "width": 320
+          },
+          "id": "sticky_trigger",
+          "name": "Trigger Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            680,
+            540
+          ]
+        },
+        {
+          "parameters": {
+            "url": "https://api.apify.com/v2/acts/{{CREDENTIAL_APIFY}}/runs",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "startUrls",
+                  "value": "={{ [{ url: 'https://' + $json.company_domain }] }}"
+                },
+                {
+                  "name": "scrapeNews",
+                  "value": true
+                },
+                {
+                  "name": "scrapeContacts",
+                  "value": true
+                },
+                {
+                  "name": "scrapeTechStack",
+                  "value": true
+                },
+                {
+                  "name": "targetTitle",
+                  "value": "={{ $json.target_title }}"
+                }
+              ]
+            }
+          },
+          "id": "apify_target_scraper",
+          "name": "Apify Target Account Scraper",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            940,
+            340
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_APIFY}}",
+              "name": "Apify API"
+            }
+          },
+          "notes": "Apify actor: TargetAccountScraper - Scrapes company website, LinkedIn, news, contacts matching target title"
+        },
+        {
+          "parameters": {
+            "content": "## Target Account Intelligence\n\nApify scrapes multiple data sources:\n1. **Company website**: About, team, products\n2. **LinkedIn**: Company page, employee count, recent posts\n3. **News**: Recent funding, product launches, hiring\n4. **Contact discovery**: Finds emails/profiles matching target criteria\n5. **Tech stack**: Identifies technologies used\n\n**Actor**: TargetAccountScraper\n**Proxy**: Residential proxy pool for safety\n**Rate limit**: 50 companies/hour\n**Output**: Company profile + 5-10 target contacts per company",
+            "height": 320,
+            "width": 340
+          },
+          "id": "sticky_scraping",
+          "name": "Account Scraping Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            900,
+            580
+          ]
+        },
+        {
+          "parameters": {
+            "jsCode": "// Process Apify results and extract target contacts\nconst apifyResults = $input.first().json;\nconst targetList = $input.item.json;\n\nconst contacts = apifyResults.contacts || [];\n\n// Return array of contacts with company context\nreturn contacts.map(contact => ({\n  ...targetList,\n  contact_name: contact.name,\n  contact_email: contact.email,\n  contact_title: contact.title,\n  contact_linkedin: contact.linkedin_url,\n  contact_phone: contact.phone,\n  company_size: apifyResults.company_size,\n  company_industry: apifyResults.industry,\n  recent_news: apifyResults.recent_news,\n  tech_stack: apifyResults.technologies,\n  company_description: apifyResults.description,\n  scraped_at: new Date().toISOString()\n}));"
+          },
+          "id": "process_contacts",
+          "name": "Process Target Contacts",
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2,
+          "position": [
+            1140,
+            340
+          ]
+        },
+        {
+          "parameters": {
+            "url": "https://api.clearbit.com/v2/combined/find",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "qs": {
+              "email": "={{ $json.contact_email }}"
+            }
+          },
+          "id": "clearbit_enrich",
+          "name": "Clearbit Enrichment",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            1340,
+            340
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_CLEARBIT}}",
+              "name": "Clearbit API"
+            }
+          },
+          "notes": "Enriches contact with Clearbit person + company data: role, seniority, social profiles, company metrics"
+        },
+        {
+          "parameters": {
+            "content": "## Contact Enrichment\n\nEnriches each discovered contact:\n- Clearbit person data (role, seniority)\n- Social media profiles\n- Employment history\n- Validated email format\n- Phone number (if available)\n- Timezone for send optimization\n\n**Fallback**: If Clearbit fails, use Apify secondary enrichment",
+            "height": 240,
+            "width": 300
+          },
+          "id": "sticky_enrichment_outbound",
+          "name": "Enrichment Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1300,
+            500
+          ]
+        },
+        {
+          "parameters": {
+            "url": "https://api.emailvalidator.com/validate",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "email",
+                  "value": "={{ $json.contact_email }}"
+                }
+              ]
+            }
+          },
+          "id": "validate_email_outbound",
+          "name": "Validate Email",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            1540,
+            340
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_EMAIL_VALIDATOR}}",
+              "name": "Email Validator API"
+            }
+          },
+          "notes": "Validates email before sending outreach to avoid bounces"
+        },
+        {
+          "parameters": {
+            "url": "https://api.phonevalidator.com/validate",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "phone",
+                  "value": "={{ $json.contact_phone }}"
+                }
+              ]
+            }
+          },
+          "id": "validate_phone",
+          "name": "Validate Phone",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            1540,
+            480
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_PHONE_VALIDATOR}}",
+              "name": "Phone Validator API"
+            }
+          },
+          "notes": "Validates phone number format and carrier info for SMS/call campaigns"
+        },
+        {
+          "parameters": {
+            "jsCode": "// AI Personalization Engine - Generate personalized opening line\nconst contact = $input.first().json;\n\n// In production, this would call OpenAI API\n// For now, generate template-based personalization\n\nconst personalizations = [];\n\n// News-based personalization\nif (contact.recent_news && contact.recent_news.length > 0) {\n  const latestNews = contact.recent_news[0];\n  personalizations.push(`I saw ${contact.company_name} recently ${latestNews.headline.toLowerCase()}`);\n}\n\n// Tech stack personalization\nif (contact.tech_stack && contact.tech_stack.includes('Salesforce')) {\n  personalizations.push(`I noticed you're using Salesforce and wanted to share how we help teams like yours`);\n}\n\n// Mutual connection (placeholder)\npersonalizations.push(`I saw you're connected with [mutual connection] on LinkedIn`);\n\n// Role-based\nif (contact.contact_title && contact.contact_title.includes('VP')) {\n  personalizations.push(`As VP, you're likely facing challenges with ${contact.target_department} efficiency`);\n}\n\n// Select best personalization\nconst openingLine = personalizations[0] || `I wanted to reach out about ${contact.company_name}'s growth`;\n\nreturn {\n  ...contact,\n  personalized_opener: openingLine,\n  personalization_score: personalizations.length * 20,\n  personalized_at: new Date().toISOString()\n};"
+          },
+          "id": "ai_personalize",
+          "name": "AI Personalization",
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2,
+          "position": [
+            1740,
+            340
+          ],
+          "notes": "Generate personalization using LLM - In production, call OpenAI API with company context, news, and contact profile"
+        },
+        {
+          "parameters": {
+            "content": "## AI Personalization\n\nGenerates personalized opening lines using:\n1. **Recent company news** (funding, launches, hiring)\n2. **Tech stack** (identify integration opportunities)\n3. **Mutual connections** (if available)\n4. **Role-specific pain points**\n5. **Company stage/size context**\n\n**In Production**: Call OpenAI GPT-4 API\n```\nPrompt: Generate 1-sentence personalized opener for [name] at [company] who is [title]. Context: [news + tech + pain points]\n```\n\n**Personalization Score**: Higher = more specific context available",
+            "height": 340,
+            "width": 360
+          },
+          "id": "sticky_personalization",
+          "name": "Personalization Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1700,
+            580
+          ]
+        },
+        {
+          "parameters": {
+            "resource": "contact",
+            "operation": "search",
+            "email": "={{ $json.contact_email }}",
+            "additionalFields": {}
+          },
+          "id": "check_hubspot_outbound",
+          "name": "Check HubSpot for Existing",
+          "type": "n8n-nodes-base.hubspot",
+          "typeVersion": 1,
+          "position": [
+            1940,
+            340
+          ],
+          "credentials": {
+            "hubspotApi": {
+              "id": "{{CREDENTIAL_HUBSPOT}}",
+              "name": "HubSpot API"
+            }
+          },
+          "notes": "Check if contact already exists - if yes, update tags; if no, create new"
+        },
+        {
+          "parameters": {
+            "conditions": {
+              "boolean": [
+                {
+                  "value1": "={{ $json.exists_in_hubspot }}",
+                  "value2": false
+                }
+              ]
+            }
+          },
+          "id": "if_new_contact",
+          "name": "Is New Contact?",
+          "type": "n8n-nodes-base.if",
+          "typeVersion": 1,
+          "position": [
+            2140,
+            340
+          ]
+        },
+        {
+          "parameters": {
+            "resource": "contact",
+            "operation": "create",
+            "email": "={{ $json.contact_email }}",
+            "additionalFields": {
+              "firstname": "={{ $json.contact_name.split(' ')[0] }}",
+              "lastname": "={{ $json.contact_name.split(' ').slice(1).join(' ') }}",
+              "company": "={{ $json.company_name }}",
+              "jobtitle": "={{ $json.contact_title }}",
+              "phone": "={{ $json.contact_phone }}",
+              "linkedin": "={{ $json.contact_linkedin }}",
+              "lead_source": "outbound",
+              "campaign_name": "={{ $json.campaign_name }}",
+              "hs_lead_status": "Outbound Prospect",
+              "personalization_note": "={{ $json.personalized_opener }}"
+            }
+          },
+          "id": "hubspot_create_outbound",
+          "name": "Create HubSpot Contact",
+          "type": "n8n-nodes-base.hubspot",
+          "typeVersion": 1,
+          "position": [
+            2340,
+            240
+          ],
+          "credentials": {
+            "hubspotApi": {
+              "id": "{{CREDENTIAL_HUBSPOT}}",
+              "name": "HubSpot API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "resource": "contact",
+            "operation": "update",
+            "contactId": "={{ $json.hubspot_contact_id }}",
+            "updateFields": {
+              "last_outbound_touch": "={{ new Date().toISOString() }}",
+              "outbound_campaign": "={{ $json.campaign_name }}",
+              "outbound_sequence_status": "active"
+            }
+          },
+          "id": "hubspot_update_existing",
+          "name": "Update Existing Contact",
+          "type": "n8n-nodes-base.hubspot",
+          "typeVersion": 1,
+          "position": [
+            2340,
+            440
+          ],
+          "credentials": {
+            "hubspotApi": {
+              "id": "{{CREDENTIAL_HUBSPOT}}",
+              "name": "HubSpot API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "content": "## Deduplication & HubSpot Sync\n\n**Logic**:\n1. Check HubSpot by email\n2. If exists: Update tags + last touch date\n3. If new: Create with full enriched data\n\n**Tags added**:\n- source: outbound\n- campaign: [campaign_name]\n- status: Outbound Prospect\n- assigned_rep: [rep_name]\n\n**Prevents**:\n- Duplicate outreach\n- Contacting existing customers\n- Spamming same prospect",
+            "height": 280,
+            "width": 320
+          },
+          "id": "sticky_dedupe_outbound",
+          "name": "Dedupe Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            2300,
+            600
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Outbound_Queue",
+            "range": "A:P",
+            "options": {}
+          },
+          "id": "sheets_outbound_queue",
+          "name": "Add to Outbound Queue Sheet",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            2540,
+            340
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "operation": "addRecipient",
+            "campaignId": "={{ $json.campaign_name }}",
+            "email": "={{ $json.contact_email }}",
+            "additionalFields": {
+              "firstName": "={{ $json.contact_name.split(' ')[0] }}",
+              "lastName": "={{ $json.contact_name.split(' ').slice(1).join(' ') }}",
+              "companyName": "={{ $json.company_name }}",
+              "customFields": {
+                "jobTitle": "={{ $json.contact_title }}",
+                "personalization": "={{ $json.personalized_opener }}",
+                "recentNews": "={{ $json.recent_news[0].headline }}",
+                "techStack": "={{ $json.tech_stack.join(', ') }}"
+              }
+            }
+          },
+          "id": "lemlist_add_outbound",
+          "name": "Add to Lemlist Campaign",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            2740,
+            340
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_LEMLIST}}",
+              "name": "Lemlist API"
+            }
+          },
+          "notes": "Adds contact to Lemlist outbound sequence with personalized variables"
+        },
+        {
+          "parameters": {
+            "content": "## Lemlist Outreach Sequence\n\nEnrolls contact in multi-touch campaign:\n- **Day 0**: Initial personalized email\n- **Day 3**: Follow-up (if no reply)\n- **Day 7**: Value-add content\n- **Day 14**: Break-up email\n\n**Personalization variables**:\n- {{firstName}}\n- {{companyName}}\n- {{personalization}} (AI-generated opener)\n- {{recentNews}}\n- {{techStack}}\n\n**Auto-pause on**: Reply, out-of-office, bounce\n**Tracking**: Opens, clicks, replies",
+            "height": 320,
+            "width": 340
+          },
+          "id": "sticky_lemlist",
+          "name": "Lemlist Sequence Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            2700,
+            560
+          ]
+        },
+        {
+          "parameters": {
+            "resource": "task",
+            "operation": "create",
+            "associatedWith": "contact",
+            "contactId": "={{ $json.hubspot_contact_id }}",
+            "subject": "Send LinkedIn Connection Request",
+            "taskType": "TODO",
+            "body": "Send personalized LinkedIn connection request to ={{ $json.contact_name }} (={{ $json.contact_title }} at ={{ $json.company_name }}).\n\nLinkedIn: ={{ $json.contact_linkedin }}\n\nSuggested message:\n'Hi ={{ $json.contact_name.split(' ')[0] }}, ={{ $json.personalized_opener }}. I'd love to connect and share some insights relevant to ={{ $json.company_name }}.'",
+            "dueDate": "={{ $now.plus(1, 'days').toISO() }}",
+            "ownerId": "={{ $json.assigned_rep_id }}"
+          },
+          "id": "hubspot_linkedin_task",
+          "name": "Create LinkedIn Task",
+          "type": "n8n-nodes-base.hubspot",
+          "typeVersion": 1,
+          "position": [
+            2940,
+            340
+          ],
+          "credentials": {
+            "hubspotApi": {
+              "id": "{{CREDENTIAL_HUBSPOT}}",
+              "name": "HubSpot API"
+            }
+          },
+          "notes": "Creates task for sales rep to send LinkedIn connection request"
+        },
+        {
+          "parameters": {
+            "content": "## LinkedIn Multi-Channel Strategy\n\nCreates task for rep to:\n1. Send personalized connection request\n2. Engage with prospect's content\n3. Send follow-up message after connection\n\n**Timing**: 1-2 days after email sequence starts\n**Assignment**: Automatically assigned to campaign owner\n**Template**: Pre-written message with personalization\n\n**Best Practice**: Human sends LinkedIn connections (not automated) to avoid account restrictions",
+            "height": 280,
+            "width": 320
+          },
+          "id": "sticky_linkedin_task",
+          "name": "LinkedIn Task Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            2900,
+            560
+          ]
+        },
+        {
+          "parameters": {
+            "httpMethod": "POST",
+            "path": "lemlist-reply-webhook",
+            "responseMode": "responseNode",
+            "options": {}
+          },
+          "id": "webhook_reply",
+          "name": "Lemlist Reply Webhook",
+          "type": "n8n-nodes-base.webhook",
+          "typeVersion": 1,
+          "position": [
+            3140,
+            340
+          ],
+          "webhookId": "lemlist-reply-handler",
+          "notes": "Receives webhook from Lemlist when prospect replies to outreach email"
+        },
+        {
+          "parameters": {
+            "content": "## Reply Handling\n\nWhen prospect replies:\n1. **Immediately**: Pause Lemlist sequence\n2. **Notify**: Alert assigned rep via Teams\n3. **HubSpot**: Update stage to 'In Conversation'\n4. **Intent Detection**: Analyze reply for buying signals\n5. **Auto-action**: If high intent detected, offer calendar booking\n\n**Intent signals**:\n- Asking about pricing\n- Requesting demo\n- Questions about features\n- Timeline mentioned\n- Budget discussed",
+            "height": 280,
+            "width": 320
+          },
+          "id": "sticky_reply_handling",
+          "name": "Reply Handler Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            3100,
+            560
+          ]
+        },
+        {
+          "parameters": {
+            "operation": "pauseRecipient",
+            "campaignId": "={{ $json.campaignId }}",
+            "email": "={{ $json.email }}"
+          },
+          "id": "lemlist_pause",
+          "name": "Pause Lemlist Sequence",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            3340,
+            340
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_LEMLIST}}",
+              "name": "Lemlist API"
+            }
+          },
+          "notes": "Pauses sequence immediately when reply detected to prevent further automated emails"
+        },
+        {
+          "parameters": {
+            "url": "https://graph.microsoft.com/v1.0/teams/{{CREDENTIAL_TEAMS}}/channels/outbound-replies/messages",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "oAuth2Api",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "body",
+                  "value": "={{ {\n  \"body\": {\n    \"content\": \"✉️ Reply from Prospect!\\n\\n👤 \" + $json.contact_name + \" (\" + $json.company_name + \")\\n📧 \" + $json.email + \"\\n\\nReply preview: \" + $json.reply_text.substring(0, 200) + \"...\\n\\n🔗 View in HubSpot: [Contact Link]\\n\\n@\" + $json.assigned_rep + \" - This is your lead!\"\n  }\n} }}"
+                }
+              ]
+            }
+          },
+          "id": "teams_notify_reply",
+          "name": "Notify Rep on Teams",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            3540,
+            340
+          ],
+          "credentials": {
+            "oAuth2Api": {
+              "id": "{{CREDENTIAL_TEAMS}}",
+              "name": "Microsoft Teams API"
+            }
+          },
+          "notes": "Sends immediate Teams notification to assigned rep with reply preview"
+        },
+        {
+          "parameters": {
+            "resource": "contact",
+            "operation": "update",
+            "contactId": "={{ $json.hubspot_contact_id }}",
+            "updateFields": {
+              "hs_lead_status": "In Conversation",
+              "last_reply_date": "={{ new Date().toISOString() }}",
+              "reply_count": "={{ ($json.reply_count || 0) + 1 }}"
+            }
+          },
+          "id": "hubspot_update_stage",
+          "name": "Update HubSpot Stage",
+          "type": "n8n-nodes-base.hubspot",
+          "typeVersion": 1,
+          "position": [
+            3740,
+            340
+          ],
+          "credentials": {
+            "hubspotApi": {
+              "id": "{{CREDENTIAL_HUBSPOT}}",
+              "name": "HubSpot API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "jsCode": "// Intent detection - analyze reply for buying signals\nconst reply = $input.first().json.reply_text.toLowerCase();\n\nconst intentKeywords = {\n  high: ['demo', 'pricing', 'price', 'cost', 'budget', 'buy', 'purchase', 'interested', 'calendar', 'meeting', 'call', 'when can', 'next steps'],\n  medium: ['tell me more', 'learn more', 'information', 'how does', 'can you', 'would like to know'],\n  low: ['thanks', 'thank you', 'interesting', 'maybe', 'later', 'not right now']\n};\n\nlet intentLevel = 'low';\nlet intentScore = 0;\n\nfor (const keyword of intentKeywords.high) {\n  if (reply.includes(keyword)) {\n    intentScore += 10;\n    intentLevel = 'high';\n  }\n}\n\nfor (const keyword of intentKeywords.medium) {\n  if (reply.includes(keyword)) {\n    intentScore += 5;\n    if (intentLevel === 'low') intentLevel = 'medium';\n  }\n}\n\nreturn {\n  ...$input.first().json,\n  intent_level: intentLevel,\n  intent_score: intentScore,\n  should_book_meeting: intentScore >= 20\n};"
+          },
+          "id": "detect_intent",
+          "name": "Detect Intent",
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2,
+          "position": [
+            3940,
+            340
+          ],
+          "notes": "Analyzes reply text for buying intent signals and determines if meeting booking should be offered"
+        },
+        {
+          "parameters": {
+            "conditions": {
+              "boolean": [
+                {
+                  "value1": "={{ $json.should_book_meeting }}",
+                  "value2": true
+                }
+              ]
+            }
+          },
+          "id": "if_high_intent",
+          "name": "High Intent?",
+          "type": "n8n-nodes-base.if",
+          "typeVersion": 1,
+          "position": [
+            4140,
+            340
+          ]
+        },
+        {
+          "parameters": {
+            "sendTo": "={{ $json.email }}",
+            "subject": "Re: ={{ $json.original_subject }}",
+            "message": "Hi ={{ $json.contact_name.split(' ')[0] }},\n\nGreat to hear from you! I'd love to show you how we can help ={{ $json.company_name }}.\n\nYou can book a time that works for you here: [Calendar Link]\n\nOr reply with your availability and I'll send over some times.\n\nLooking forward to speaking!\n\nBest,\n[Rep Name]",
+            "options": {
+              "senderName": "={{ $json.assigned_rep }}"
+            }
+          },
+          "id": "gmail_booking_offer",
+          "name": "Send Booking Link (Gmail)",
+          "type": "n8n-nodes-base.gmail",
+          "typeVersion": 1,
+          "position": [
+            4340,
+            240
+          ],
+          "credentials": {
+            "gmailOAuth2": {
+              "id": "{{CREDENTIAL_GMAIL}}",
+              "name": "Gmail OAuth2"
+            }
+          },
+          "notes": "Sends meeting booking link when high intent detected"
+        },
+        {
+          "parameters": {
+            "content": "## Rate Limiting & Safe Scraping\n\n**Apify Best Practices**:\n- Use residential proxy pools\n- Rotate user agents\n- Add random delays (2-5s between requests)\n- Respect robots.txt\n- Max 50 companies/hour\n\n**Rate Limits**:\n- Apify: 100 concurrent runs\n- Clearbit: 600 req/min\n- Email validator: 50 req/min\n- Lemlist: 100 recipients/campaign/day\n\n**Retry Logic**:\n- 429 (rate limit): Exponential backoff\n- 5xx errors: Retry 3x with 1min delay\n- Network errors: Retry 2x immediately\n\n**Pagination**: Process in batches of 10 contacts to avoid timeouts",
+            "height": 380,
+            "width": 400
+          },
+          "id": "sticky_rate_limits",
+          "name": "Rate Limiting & Safety Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1140,
+            880
+          ]
+        },
+        {
+          "parameters": {
+            "rule": {
+              "interval": [
+                {
+                  "field": "hours",
+                  "hoursInterval": 1
+                }
+              ]
+            },
+            "resume": "webhook",
+            "maxRetries": 3,
+            "retryInterval": 300
+          },
+          "id": "error_handler_outbound",
+          "name": "Error Handler",
+          "type": "n8n-nodes-base.errorTrigger",
+          "typeVersion": 1,
+          "position": [
+            720,
+            880
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Error_Log",
+            "range": "A:G",
+            "options": {}
+          },
+          "id": "log_error_outbound",
+          "name": "Log Error to Sheet",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            920,
+            880
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          }
+        }
+      ],
+      "connections": {
+        "Watch Target List Sheet": {
+          "main": [
+            [
+              {
+                "node": "Apify Target Account Scraper",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Apify Target Account Scraper": {
+          "main": [
+            [
+              {
+                "node": "Process Target Contacts",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Process Target Contacts": {
+          "main": [
+            [
+              {
+                "node": "Clearbit Enrichment",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Clearbit Enrichment": {
+          "main": [
+            [
+              {
+                "node": "Validate Email",
+                "type": "main",
+                "index": 0
+              },
+              {
+                "node": "Validate Phone",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Validate Email": {
+          "main": [
+            [
+              {
+                "node": "AI Personalization",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Validate Phone": {
+          "main": [
+            [
+              {
+                "node": "AI Personalization",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "AI Personalization": {
+          "main": [
+            [
+              {
+                "node": "Check HubSpot for Existing",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Check HubSpot for Existing": {
+          "main": [
+            [
+              {
+                "node": "Is New Contact?",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Is New Contact?": {
+          "main": [
+            [
+              {
+                "node": "Create HubSpot Contact",
+                "type": "main",
+                "index": 0
+              }
+            ],
+            [
+              {
+                "node": "Update Existing Contact",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Create HubSpot Contact": {
+          "main": [
+            [
+              {
+                "node": "Add to Outbound Queue Sheet",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Update Existing Contact": {
+          "main": [
+            [
+              {
+                "node": "Add to Outbound Queue Sheet",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Add to Outbound Queue Sheet": {
+          "main": [
+            [
+              {
+                "node": "Add to Lemlist Campaign",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Add to Lemlist Campaign": {
+          "main": [
+            [
+              {
+                "node": "Create LinkedIn Task",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Lemlist Reply Webhook": {
+          "main": [
+            [
+              {
+                "node": "Pause Lemlist Sequence",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Pause Lemlist Sequence": {
+          "main": [
+            [
+              {
+                "node": "Notify Rep on Teams",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Notify Rep on Teams": {
+          "main": [
+            [
+              {
+                "node": "Update HubSpot Stage",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Update HubSpot Stage": {
+          "main": [
+            [
+              {
+                "node": "Detect Intent",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Detect Intent": {
+          "main": [
+            [
+              {
+                "node": "High Intent?",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "High Intent?": {
+          "main": [
+            [
+              {
+                "node": "Send Booking Link (Gmail)",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Error Handler": {
+          "main": [
+            [
+              {
+                "node": "Log Error to Sheet",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        }
+      },
+      "active": false,
+      "settings": {
+        "executionOrder": "v1"
+      },
+      "versionId": "1",
+      "id": "outbound_pipeline_001",
+      "tags": [
+        {
+          "name": "GTM",
+          "id": "gtm_tag"
+        },
+        {
+          "name": "Outbound",
+          "id": "outbound_tag"
+        }
+      ]
+    },
+    {
+      "name": "Combined Pipeline",
+      "nodes": [
+        {
+          "parameters": {
+            "content": "## Combined Inbound/Outbound Pipeline\n\n**Purpose**: Unified pipeline handling both inbound and outbound leads with shared enrichment, scoring, and routing logic\n\n**Architecture**:\n1. Single entry point (webhook/trigger)\n2. Lead type detection (inbound vs outbound)\n3. Route to appropriate subflow logic\n4. Shared services: Enrichment, Scoring, Dedupe, HubSpot sync\n5. Centralized data repository (Google Sheets)\n6. Unified monitoring and reporting\n\n**Benefits**:\n- Single source of truth for all leads\n- Consistent data quality\n- No duplicate processing\n- Holistic lead scoring\n- Unified reporting dashboard",
+            "height": 440,
+            "width": 460
+          },
+          "id": "sticky_combined_overview",
+          "name": "Combined Pipeline Overview",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            240,
+            240
+          ]
+        },
+        {
+          "parameters": {
+            "httpMethod": "POST",
+            "path": "unified-lead-intake",
+            "responseMode": "responseNode",
+            "options": {}
+          },
+          "id": "webhook_unified",
+          "name": "Unified Lead Webhook",
+          "type": "n8n-nodes-base.webhook",
+          "typeVersion": 1,
+          "position": [
+            760,
+            380
+          ],
+          "webhookId": "unified-lead-intake",
+          "notes": "Single webhook endpoint for all lead sources - inbound forms, API submissions, integrations"
+        },
+        {
+          "parameters": {
+            "content": "## Unified Entry Point\n\nAccepts leads from:\n- **Inbound**: Website forms, landing pages, chatbots, webinars\n- **Outbound**: Manual list uploads, automated scraping, partner integrations\n- **API**: Direct submissions from other tools\n\n**Detection fields**:\n- `source`: 'inbound' | 'outbound' | 'api'\n- `origin`: Header or URL parameter\n- `list_id`: Present for outbound batches\n- `form_id`: Present for inbound submissions",
+            "height": 300,
+            "width": 340
+          },
+          "id": "sticky_unified_entry",
+          "name": "Entry Point Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            720,
+            600
+          ]
+        },
+        {
+          "parameters": {
+            "respondWith": "json",
+            "responseBody": "={{ { \"success\": true, \"message\": \"Lead received\", \"lead_id\": $json.email || $json.contact_email, \"type\": $json.detected_type } }}"
+          },
+          "id": "webhook_response_combined",
+          "name": "Webhook Response",
+          "type": "n8n-nodes-base.respondToWebhook",
+          "typeVersion": 1,
+          "position": [
+            960,
+            380
+          ]
+        },
+        {
+          "parameters": {
+            "jsCode": "// Lead Type Detection - Determine if inbound or outbound\nconst lead = $input.first().json;\n\nlet leadType = 'unknown';\nlet source = lead.source || '';\n\n// Detection logic\nif (lead.list_id || lead.campaign_id || source === 'outbound') {\n  leadType = 'outbound';\n} else if (lead.form_id || lead.page_url || source === 'inbound' || source.includes('website') || source.includes('landing')) {\n  leadType = 'inbound';\n} else if (lead.origin && lead.origin.includes('outbound')) {\n  leadType = 'outbound';\n} else if (lead.origin && lead.origin.includes('inbound')) {\n  leadType = 'inbound';\n} else {\n  // Default: check if enriched contact data present (outbound) or minimal form data (inbound)\n  leadType = lead.company_domain ? 'outbound' : 'inbound';\n}\n\nreturn {\n  ...lead,\n  detected_type: leadType,\n  detection_timestamp: new Date().toISOString(),\n  // Normalize field names\n  email: lead.email || lead.contact_email,\n  name: lead.name || lead.contact_name,\n  company: lead.company || lead.company_name,\n  title: lead.job_title || lead.contact_title || lead.title\n};"
+          },
+          "id": "detect_lead_type",
+          "name": "Detect Lead Type",
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2,
+          "position": [
+            1160,
+            380
+          ]
+        },
+        {
+          "parameters": {
+            "content": "## Lead Type Detection\n\n**Detection Logic**:\n1. Check for `list_id` or `campaign_id` → Outbound\n2. Check for `form_id` or `page_url` → Inbound\n3. Check `source` field value\n4. Check `origin` header\n5. Check data completeness (enriched = outbound)\n\n**Field Normalization**:\nMaps various field names to canonical format:\n- email / contact_email → email\n- name / contact_name → name\n- job_title / contact_title / title → title\n- company / company_name → company",
+            "height": 300,
+            "width": 340
+          },
+          "id": "sticky_detection",
+          "name": "Detection Logic Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1120,
+            600
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/All_Leads_Raw",
+            "range": "A:N",
+            "options": {}
+          },
+          "id": "sheets_all_leads_raw",
+          "name": "Save to Unified Raw Leads",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            1360,
+            380
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          },
+          "notes": "Central repository for ALL leads regardless of source"
+        },
+        {
+          "parameters": {
+            "content": "## Centralized Data Repository\n\n**Google Sheets Structure**:\n\n**All_Leads_Raw**: Every lead, no processing\n**Enriched_Leads**: After enrichment complete\n**MQL_Queue**: Qualified leads ready for sales\n**Outbound_Queue**: Outbound prospects in sequence\n**Nurture_Queue**: Low-score leads in drip\n**Canonical_Records**: Single deduplicated record per contact\n\n**Benefits**:\n- Audit trail\n- Easy analysis in Sheets/BI tools\n- Recovery if pipeline fails\n- Historical tracking",
+            "height": 320,
+            "width": 360
+          },
+          "id": "sticky_data_repo",
+          "name": "Data Repository Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1320,
+            620
+          ]
+        },
+        {
+          "parameters": {
+            "conditions": {
+              "string": [
+                {
+                  "value1": "={{ $json.detected_type }}",
+                  "value2": "inbound"
+                }
+              ]
+            }
+          },
+          "id": "if_inbound",
+          "name": "Is Inbound?",
+          "type": "n8n-nodes-base.if",
+          "typeVersion": 1,
+          "position": [
+            1560,
+            380
+          ]
+        },
+        {
+          "parameters": {
+            "url": "https://api.apify.com/v2/acts/{{CREDENTIAL_APIFY}}/runs",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "email",
+                  "value": "={{ $json.email }}"
+                },
+                {
+                  "name": "company",
+                  "value": "={{ $json.company }}"
+                },
+                {
+                  "name": "enrichment_type",
+                  "value": "inbound"
+                }
+              ]
+            }
+          },
+          "id": "apify_shared_enrichment",
+          "name": "Shared Enrichment Service",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            1760,
+            280
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_APIFY}}",
+              "name": "Apify API"
+            }
+          },
+          "notes": "Shared enrichment used by both inbound and outbound flows - Apify actor: UnifiedContactEnricher"
+        },
+        {
+          "parameters": {
+            "url": "https://api.apify.com/v2/acts/{{CREDENTIAL_APIFY}}/runs",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "company_domain",
+                  "value": "={{ $json.company_domain }}"
+                },
+                {
+                  "name": "target_title",
+                  "value": "={{ $json.title }}"
+                },
+                {
+                  "name": "enrichment_type",
+                  "value": "outbound"
+                }
+              ]
+            }
+          },
+          "id": "apify_outbound_enrichment",
+          "name": "Outbound Enrichment Service",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            1760,
+            480
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_APIFY}}",
+              "name": "Apify API"
+            }
+          },
+          "notes": "Outbound-specific enrichment with company scraping - Apify actor: TargetAccountEnricher"
+        },
+        {
+          "parameters": {
+            "content": "## Shared Enrichment Service\n\n**Universal Enrichment**:\n- Company data (size, industry, revenue)\n- Contact verification\n- LinkedIn profile\n- Phone number\n- Job level/seniority\n- Technology stack\n\n**Inbound-specific**:\n- Email validation priority\n- Behavioral data (page visits, downloads)\n\n**Outbound-specific**:\n- Company news scraping\n- Competitive intelligence\n- Contact discovery\n\n**Result**: Standardized enriched lead object",
+            "height": 320,
+            "width": 340
+          },
+          "id": "sticky_shared_enrichment",
+          "name": "Shared Enrichment Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1720,
+            680
+          ]
+        },
+        {
+          "parameters": {
+            "url": "https://api.emailvalidator.com/validate",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "email",
+                  "value": "={{ $json.email }}"
+                }
+              ]
+            }
+          },
+          "id": "validate_email_shared",
+          "name": "Validate Email (Shared)",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            1960,
+            380
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_EMAIL_VALIDATOR}}",
+              "name": "Email Validator API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "url": "https://api.linkedinvalidator.com/check",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "linkedin_url",
+                  "value": "={{ $json.linkedin_url }}"
+                }
+              ]
+            }
+          },
+          "id": "validate_linkedin_shared",
+          "name": "Validate LinkedIn (Shared)",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            2160,
+            380
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_LINKEDIN_VALIDATOR}}",
+              "name": "LinkedIn Validator API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "jsCode": "// Centralized Lead Scoring Engine\n// Used by both inbound and outbound flows\nconst lead = $input.first().json;\n\nlet score = 0;\nconst scoreBreakdown = {};\n\n// 1. COMPANY FIT (0-30 points)\nconst sizeScores = {'1-10': 5, '11-50': 10, '51-200': 20, '201-1000': 25, '1001+': 20};\nconst companyScore = sizeScores[lead.company_size] || 0;\nscore += companyScore;\nscoreBreakdown.company_size = companyScore;\n\nconst targetIndustries = ['Software', 'Technology', 'SaaS', 'Finance', 'Healthcare', 'E-commerce'];\nconst industryScore = targetIndustries.includes(lead.company_industry) ? 15 : 0;\nscore += industryScore;\nscoreBreakdown.industry = industryScore;\n\n// 2. CONTACT QUALITY (0-30 points)\nconst levelScores = {'C-Level': 25, 'VP': 20, 'Director': 15, 'Manager': 10, 'IC': 5};\nconst levelScore = levelScores[lead.job_level] || 0;\nscore += levelScore;\nscoreBreakdown.job_level = levelScore;\n\nlet dataScore = 0;\nif (lead.email_valid) dataScore += 5;\nif (lead.linkedin_url && lead.linkedin_valid) dataScore += 5;\nif (lead.phone && lead.phone_valid) dataScore += 5;\nscore += dataScore;\nscoreBreakdown.data_quality = dataScore;\n\n// 3. INTENT & ENGAGEMENT (0-25 points)\nlet intentScore = 0;\nif (lead.detected_type === 'inbound') {\n  const highIntentSources = ['demo_request', 'pricing_page', 'contact_sales', 'free_trial'];\n  const mediumIntentSources = ['webinar', 'whitepaper', 'case_study'];\n  if (highIntentSources.includes(lead.source)) intentScore = 20;\n  else if (mediumIntentSources.includes(lead.source)) intentScore = 10;\n  else intentScore = 5;\n} else {\n  // Outbound: score based on research quality\n  if (lead.personalization_score > 60) intentScore = 15;\n  else if (lead.personalization_score > 30) intentScore = 10;\n  else intentScore = 5;\n}\nscore += intentScore;\nscoreBreakdown.intent = intentScore;\n\n// 4. TIMING & SIGNALS (0-15 points)\nlet timingScore = 0;\nif (lead.recent_news && lead.recent_news.includes('funding')) timingScore += 10;\nif (lead.tech_stack && lead.tech_stack.includes('competitor')) timingScore += 5;\nif (lead.hiring_growth === 'high') timingScore += 5;\nscore += Math.min(timingScore, 15);\nscoreBreakdown.timing = timingScore;\n\n// Determine tier\nlet tier = 'Low';\nlet is_mql = false;\nif (score >= 75) {\n  tier = 'Hot';\n  is_mql = true;\n} else if (score >= 55) {\n  tier = 'MQL';\n  is_mql = true;\n} else if (score >= 35) {\n  tier = 'Nurture';\n} else {\n  tier = 'Low';\n}\n\nreturn {\n  ...lead,\n  lead_score: score,\n  score_breakdown: scoreBreakdown,\n  lead_tier: tier,\n  is_mql: is_mql,\n  scored_at: new Date().toISOString(),\n  scoring_version: 'v2.0'\n};"
+          },
+          "id": "score_unified",
+          "name": "Centralized Scoring Engine",
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2,
+          "position": [
+            2360,
+            380
+          ]
+        },
+        {
+          "parameters": {
+            "content": "## Centralized Scoring Engine\n\n**Unified scoring model** for both inbound/outbound:\n\n**100-point scale**:\n1. **Company Fit** (30 pts)\n   - Size: 0-25\n   - Industry: 0-15\n\n2. **Contact Quality** (30 pts)\n   - Seniority: 0-25\n   - Data completeness: 0-15\n\n3. **Intent/Engagement** (25 pts)\n   - Inbound: Source quality\n   - Outbound: Personalization depth\n\n4. **Timing Signals** (15 pts)\n   - Funding, hiring, tech stack\n\n**Tiers**:\n- Hot: 75+ (immediate outreach)\n- MQL: 55-74 (qualified for sales)\n- Nurture: 35-54 (automated drip)\n- Low: <35 (long-term nurture)",
+            "height": 400,
+            "width": 380
+          },
+          "id": "sticky_scoring",
+          "name": "Unified Scoring Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            2320,
+            700
+          ]
+        },
+        {
+          "parameters": {
+            "jsCode": "// Canonical Record Matching & Deduplication\n// Ensures single record per unique person/company\nconst lead = $input.first().json;\n\n// Normalize data for matching\nconst normalizedEmail = (lead.email || '').toLowerCase().trim();\nconst normalizedPhone = (lead.phone || '').replace(/\\D/g, '');\nconst companyDomain = lead.company_domain || (lead.email ? lead.email.split('@')[1] : '');\n\n// Matching rules (in priority order)\nconst matchingRules = {\n  email: normalizedEmail,\n  phone: normalizedPhone,\n  company_domain: companyDomain,\n  linkedin_url: lead.linkedin_url\n};\n\n// In production, this would query HubSpot + Google Sheets\n// For now, simulate with flag\nconst isExisting = false; // Replace with actual lookup\n\nreturn {\n  ...lead,\n  normalized_email: normalizedEmail,\n  normalized_phone: normalizedPhone,\n  company_domain: companyDomain,\n  matching_rules: matchingRules,\n  is_duplicate: isExisting,\n  canonical_id: isExisting ? 'existing_id' : 'new_' + Date.now(),\n  dedupe_timestamp: new Date().toISOString()\n};"
+          },
+          "id": "canonicalize",
+          "name": "Canonicalization & Dedupe Service",
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2,
+          "position": [
+            2560,
+            380
+          ]
+        },
+        {
+          "parameters": {
+            "content": "## Canonicalization & Deduplication\n\n**Ensures single source of truth**:\n\n**Matching Logic** (checked in order):\n1. **Exact email match** → Same person\n2. **Normalized phone match** → Likely same\n3. **Company domain + name similarity** → Same company contact\n4. **LinkedIn URL** → Same person\n\n**Field Normalization**:\n- Email: lowercase, trim\n- Phone: remove all non-digits\n- Company domain: extract from email or URL\n- Name: title case, handle Jr/Sr\n\n**Merge Strategy**:\n- Keep most recent data\n- Preserve all source attributions\n- Increment interaction count\n- Update score if new data improves it\n\n**Prevents**:\n- Duplicate CRM records\n- Multiple outreach to same person\n- Conflicting data",
+            "height": 400,
+            "width": 380
+          },
+          "id": "sticky_canonicalization",
+          "name": "Canonicalization Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            2520,
+            700
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "lookup",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Canonical_Records",
+            "range": "A:Z",
+            "lookupColumn": "email",
+            "lookupValue": "={{ $json.normalized_email }}"
+          },
+          "id": "lookup_canonical",
+          "name": "Lookup Canonical Record",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            2760,
+            380
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          },
+          "notes": "Check centralized canonical records sheet for existing contact"
+        },
+        {
+          "parameters": {
+            "resource": "contact",
+            "operation": "search",
+            "email": "={{ $json.normalized_email }}",
+            "additionalFields": {}
+          },
+          "id": "lookup_hubspot",
+          "name": "Lookup in HubSpot",
+          "type": "n8n-nodes-base.hubspot",
+          "typeVersion": 1,
+          "position": [
+            2760,
+            520
+          ],
+          "credentials": {
+            "hubspotApi": {
+              "id": "{{CREDENTIAL_HUBSPOT}}",
+              "name": "HubSpot API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "conditions": {
+              "boolean": [
+                {
+                  "value1": "={{ $json.is_duplicate }}",
+                  "value2": false
+                }
+              ]
+            }
+          },
+          "id": "if_new_record",
+          "name": "Is New Record?",
+          "type": "n8n-nodes-base.if",
+          "typeVersion": 1,
+          "position": [
+            2960,
+            380
+          ]
+        },
+        {
+          "parameters": {
+            "resource": "contact",
+            "operation": "upsert",
+            "email": "={{ $json.normalized_email }}",
+            "additionalFields": {
+              "firstname": "={{ $json.name.split(' ')[0] }}",
+              "lastname": "={{ $json.name.split(' ').slice(1).join(' ') }}",
+              "company": "={{ $json.company }}",
+              "jobtitle": "={{ $json.title }}",
+              "phone": "={{ $json.normalized_phone }}",
+              "linkedin": "={{ $json.linkedin_url }}",
+              "lead_score": "={{ $json.lead_score }}",
+              "lead_tier": "={{ $json.lead_tier }}",
+              "lead_source": "={{ $json.detected_type }}",
+              "original_source": "={{ $json.source }}",
+              "hs_lead_status": "={{ $json.is_mql ? 'MQL' : 'Nurture' }}"
+            }
+          },
+          "id": "hubspot_upsert",
+          "name": "Upsert to HubSpot",
+          "type": "n8n-nodes-base.hubspot",
+          "typeVersion": 1,
+          "position": [
+            3160,
+            380
+          ],
+          "credentials": {
+            "hubspotApi": {
+              "id": "{{CREDENTIAL_HUBSPOT}}",
+              "name": "HubSpot API"
+            }
+          },
+          "notes": "Creates or updates contact in HubSpot with unified data model"
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Enriched_Leads",
+            "range": "A:Z",
+            "options": {}
+          },
+          "id": "sheets_enriched",
+          "name": "Save to Enriched Leads Sheet",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            3360,
+            380
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "conditions": {
+              "boolean": [
+                {
+                  "value1": "={{ $json.is_mql }}",
+                  "value2": true
+                }
+              ]
+            }
+          },
+          "id": "if_mql_combined",
+          "name": "Is MQL?",
+          "type": "n8n-nodes-base.if",
+          "typeVersion": 1,
+          "position": [
+            3560,
+            380
+          ]
+        },
+        {
+          "parameters": {
+            "url": "https://graph.microsoft.com/v1.0/teams/{{CREDENTIAL_TEAMS}}/channels/{{ $json.detected_type === 'inbound' ? 'inbound-mqls' : 'outbound-intent' }}/messages",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "oAuth2Api",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "body",
+                  "value": "={{ {\n  \"body\": {\n    \"content\": ($json.detected_type === 'inbound' ? '🔥 Inbound MQL' : '🎯 Outbound MQL') + \": \" + $json.name + \" from \" + $json.company + \"\\n\\n📊 Score: \" + $json.lead_score + \" (\" + $json.lead_tier + \")\\n📧 \" + $json.normalized_email + \"\\n💼 \" + $json.title + \"\\n🏢 \" + $json.company + \" (\" + $json.company_size + \")\\n🏭 Industry: \" + $json.company_industry + \"\\n\\n\" + ($json.detected_type === 'inbound' ? '📍 Source: ' + $json.source : '🎨 Personalization: ' + $json.personalized_opener) + \"\\n\\n🔗 View in HubSpot: [Contact Link]\"\n  }\n} }}"
+                }
+              ]
+            }
+          },
+          "id": "teams_notify_unified",
+          "name": "Route Teams Notification",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            3760,
+            280
+          ],
+          "credentials": {
+            "oAuth2Api": {
+              "id": "{{CREDENTIAL_TEAMS}}",
+              "name": "Microsoft Teams API"
+            }
+          },
+          "notes": "Routes notification to appropriate Teams channel based on lead type"
+        },
+        {
+          "parameters": {
+            "content": "## Unified Routing Logic\n\n**MQL Path** (score ≥55):\n1. Notify sales team via Teams\n   - Inbound → #inbound-mqls\n   - Outbound → #outbound-intent\n2. Add to MQL queue sheet\n3. Enroll in appropriate sequence:\n   - Inbound MQL → Lemlist nurture\n   - Outbound MQL → Lemlist outreach\n\n**Nurture Path** (35-54):\n1. Add to nurture sheet\n2. Start Gmail drip campaign\n3. Re-score after engagement\n\n**Low Priority** (<35):\n1. Add to long-term nurture\n2. Minimal touch cadence\n\n**Channel Selection**:\n- Lemlist: Available & score ≥55\n- Gmail: Fallback or nurture leads",
+            "height": 340,
+            "width": 360
+          },
+          "id": "sticky_routing",
+          "name": "Routing Logic Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            3720,
+            520
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/MQL_Queue",
+            "range": "A:Z",
+            "options": {}
+          },
+          "id": "sheets_mql_unified",
+          "name": "Add to MQL Queue",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            3960,
+            280
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "conditions": {
+              "string": [
+                {
+                  "value1": "={{ $json.detected_type }}",
+                  "value2": "inbound"
+                }
+              ]
+            }
+          },
+          "id": "if_inbound_mql",
+          "name": "Inbound MQL?",
+          "type": "n8n-nodes-base.if",
+          "typeVersion": 1,
+          "position": [
+            4160,
+            280
+          ]
+        },
+        {
+          "parameters": {
+            "operation": "addRecipient",
+            "campaignId": "inbound_mql_nurture",
+            "email": "={{ $json.normalized_email }}",
+            "additionalFields": {
+              "firstName": "={{ $json.name.split(' ')[0] }}",
+              "lastName": "={{ $json.name.split(' ').slice(1).join(' ') }}",
+              "companyName": "={{ $json.company }}",
+              "customFields": {
+                "jobTitle": "={{ $json.title }}",
+                "leadScore": "={{ $json.lead_score }}",
+                "source": "={{ $json.source }}"
+              }
+            }
+          },
+          "id": "lemlist_inbound_mql",
+          "name": "Lemlist Inbound Sequence",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            4360,
+            200
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_LEMLIST}}",
+              "name": "Lemlist API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "operation": "addRecipient",
+            "campaignId": "={{ $json.campaign_name || 'default_outbound' }}",
+            "email": "={{ $json.normalized_email }}",
+            "additionalFields": {
+              "firstName": "={{ $json.name.split(' ')[0] }}",
+              "lastName": "={{ $json.name.split(' ').slice(1).join(' ') }}",
+              "companyName": "={{ $json.company }}",
+              "customFields": {
+                "jobTitle": "={{ $json.title }}",
+                "personalization": "={{ $json.personalized_opener }}",
+                "leadScore": "={{ $json.lead_score }}"
+              }
+            }
+          },
+          "id": "lemlist_outbound_mql",
+          "name": "Lemlist Outbound Sequence",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            4360,
+            360
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_LEMLIST}}",
+              "name": "Lemlist API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Nurture_Queue",
+            "range": "A:Z",
+            "options": {}
+          },
+          "id": "sheets_nurture_unified",
+          "name": "Add to Nurture Queue",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            3760,
+            480
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "sendTo": "={{ $json.normalized_email }}",
+            "subject": "={{ $json.detected_type === 'inbound' ? 'Welcome! Here\\'s what you need to know' : 'Following up on my previous email' }}",
+            "message": "Hi ={{ $json.name.split(' ')[0] }},\n\n={{ $json.detected_type === 'inbound' ? 'Thanks for your interest in our solution. Based on your role at ' + $json.company + ', I thought you\\'d find these resources helpful...' : 'I wanted to follow up on my previous email about ' + $json.company + '. ' + $json.personalized_opener + '...' }}\n\nBest regards,\n[Your Team]",
+            "options": {
+              "senderName": "Growth Team"
+            }
+          },
+          "id": "gmail_nurture_unified",
+          "name": "Send Nurture Email",
+          "type": "n8n-nodes-base.gmail",
+          "typeVersion": 1,
+          "position": [
+            3960,
+            480
+          ],
+          "credentials": {
+            "gmailOAuth2": {
+              "id": "{{CREDENTIAL_GMAIL}}",
+              "name": "Gmail OAuth2"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "content": "## Conditional Logic & Fallbacks\n\n**Email Validation Failed**:\n1. Flag as `email_invalid`\n2. Send to human review queue\n3. Attempt alternative email discovery\n4. Notify data quality team\n\n**LinkedIn Invalid/Missing**:\n1. Mark `linkedin_missing`\n2. Try alternative enrichment (Clearbit, ZoomInfo)\n3. Downgrade personalization score\n4. Still proceed if email valid\n\n**Phone Invalid**:\n1. Attempt secondary provider\n2. Flag for manual research\n3. Proceed without phone\n4. Lower data quality score\n\n**Enrichment Failure**:\n1. Use original form data\n2. Flag for later re-enrichment\n3. Lower confidence score\n4. Still create record",
+            "height": 400,
+            "width": 380
+          },
+          "id": "sticky_conditionals",
+          "name": "Conditional Logic Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1960,
+            1080
+          ]
+        },
+        {
+          "parameters": {
+            "conditions": {
+              "boolean": [
+                {
+                  "value1": "={{ $json.email_valid }}",
+                  "value2": false
+                }
+              ]
+            }
+          },
+          "id": "if_email_invalid",
+          "name": "Email Invalid?",
+          "type": "n8n-nodes-base.if",
+          "typeVersion": 1,
+          "position": [
+            2160,
+            560
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Human_Review_Queue",
+            "range": "A:M",
+            "options": {}
+          },
+          "id": "sheets_review_queue",
+          "name": "Send to Human Review",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            2360,
+            640
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          },
+          "notes": "Queue for data quality team to manually verify and fix invalid emails"
+        },
+        {
+          "parameters": {
+            "conditions": {
+              "boolean": [
+                {
+                  "value1": "={{ !$json.linkedin_url || !$json.linkedin_valid }}",
+                  "value2": true
+                }
+              ]
+            }
+          },
+          "id": "if_linkedin_missing",
+          "name": "LinkedIn Missing?",
+          "type": "n8n-nodes-base.if",
+          "typeVersion": 1,
+          "position": [
+            2360,
+            380
+          ]
+        },
+        {
+          "parameters": {
+            "url": "https://api.clearbit.com/v2/combined/find",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "httpHeaderAuth",
+            "qs": {
+              "email": "={{ $json.normalized_email }}"
+            }
+          },
+          "id": "fallback_enrichment",
+          "name": "Alternative Enrichment (Clearbit)",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            2560,
+            460
+          ],
+          "credentials": {
+            "httpHeaderAuth": {
+              "id": "{{CREDENTIAL_CLEARBIT}}",
+              "name": "Clearbit API"
+            }
+          },
+          "notes": "Fallback enrichment when LinkedIn data missing - attempts to find LinkedIn via Clearbit"
+        },
+        {
+          "parameters": {
+            "jsCode": "// Update lead with linkedin_missing flag\nreturn {\n  ...$input.first().json,\n  linkedin_missing: true,\n  linkedin_attempted: true,\n  data_quality_score: ($input.first().json.data_quality_score || 100) - 10\n};"
+          },
+          "id": "flag_linkedin_missing",
+          "name": "Flag LinkedIn Missing",
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2,
+          "position": [
+            2560,
+            560
+          ]
+        },
+        {
+          "parameters": {
+            "jsCode": "// Workflow Run Monitoring & Logging\nconst execution = $execution;\nconst items = $input.all();\n\nconst summary = {\n  execution_id: execution.id,\n  workflow_name: execution.workflow.name,\n  start_time: execution.startedAt,\n  end_time: new Date().toISOString(),\n  duration_seconds: (new Date() - new Date(execution.startedAt)) / 1000,\n  total_leads_processed: items.length,\n  inbound_count: items.filter(i => i.json.detected_type === 'inbound').length,\n  outbound_count: items.filter(i => i.json.detected_type === 'outbound').length,\n  mql_count: items.filter(i => i.json.is_mql).length,\n  nurture_count: items.filter(i => !i.json.is_mql && i.json.lead_score >= 35).length,\n  errors_count: 0, // Would be populated by error handler\n  avg_lead_score: items.reduce((sum, i) => sum + (i.json.lead_score || 0), 0) / items.length\n};\n\nreturn summary;"
+          },
+          "id": "monitor_execution",
+          "name": "Monitor Workflow Execution",
+          "type": "n8n-nodes-base.code",
+          "typeVersion": 2,
+          "position": [
+            4560,
+            380
+          ]
+        },
+        {
+          "parameters": {
+            "content": "## Monitoring & Reporting\n\n**Real-time Metrics**:\n- Leads processed (inbound/outbound)\n- MQL conversion rate\n- Average lead score\n- Data quality metrics\n- Processing time\n- Error rate\n\n**Daily Summary** (Teams):\n- Total leads: XX\n- MQLs generated: XX\n- Top sources\n- Quality issues\n- Performance vs. yesterday\n\n**Logged to Google Sheets**:\n- Execution history\n- Performance trends\n- Error log with details\n\n**Alerts**:\n- Error rate >5%\n- Processing time >10min\n- MQL rate <10%",
+            "height": 360,
+            "width": 360
+          },
+          "id": "sticky_monitoring",
+          "name": "Monitoring Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            4520,
+            640
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Workflow_Logs",
+            "range": "A:L",
+            "options": {}
+          },
+          "id": "sheets_workflow_log",
+          "name": "Log to Workflow Sheet",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            4760,
+            380
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "url": "https://graph.microsoft.com/v1.0/teams/{{CREDENTIAL_TEAMS}}/channels/ops-monitoring/messages",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "oAuth2Api",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "body",
+                  "value": "={{ {\n  \"body\": {\n    \"content\": \"📊 Daily Pipeline Summary \" + new Date().toLocaleDateString() + \"\\n\\n\" +\n      \"✅ Leads Processed: \" + $json.total_leads_processed + \"\\n\" +\n      \"📥 Inbound: \" + $json.inbound_count + \"\\n\" +\n      \"📤 Outbound: \" + $json.outbound_count + \"\\n\" +\n      \"🔥 MQLs Generated: \" + $json.mql_count + \"\\n\" +\n      \"🌱 Nurture Queue: \" + $json.nurture_count + \"\\n\" +\n      \"📈 Avg Score: \" + Math.round($json.avg_lead_score) + \"\\n\" +\n      \"⏱️ Processing Time: \" + Math.round($json.duration_seconds) + \"s\\n\" +\n      \"❌ Errors: \" + $json.errors_count\n  }\n} }}"
+                }
+              ]
+            },
+            "options": {
+              "timeout": 10000
+            }
+          },
+          "id": "teams_daily_summary",
+          "name": "Send Daily Summary to Teams",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            4960,
+            380
+          ],
+          "credentials": {
+            "oAuth2Api": {
+              "id": "{{CREDENTIAL_TEAMS}}",
+              "name": "Microsoft Teams API"
+            }
+          },
+          "notes": "Posts daily summary to ops monitoring channel"
+        },
+        {
+          "parameters": {
+            "content": "## API Endpoint Placeholders\n\n**Replace with actual endpoints**:\n\n**Apify Actors**:\n- CompanyContactEnricher: `apify/company-contact-enricher`\n- TargetAccountScraper: `apify/target-account-scraper`\n- UnifiedContactEnricher: `apify/unified-enricher`\n\n**Email Validation**:\n- Primary: `https://api.zerobounce.net/v2/validate`\n- Fallback: `https://api.hunter.io/v2/email-verifier`\n\n**LinkedIn Validation**:\n- `https://api.proxycurl.com/api/linkedin/profile`\n\n**Phone Validation**:\n- `https://api.numverify.com/validate`\n\n**Expected JSON Keys from Apify**:\n```json\n{\n  \"email_verified\": string,\n  \"company_size\": string,\n  \"industry\": string,\n  \"linkedin_url\": string,\n  \"phone\": string,\n  \"job_level\": string,\n  \"tech_stack\": array,\n  \"recent_news\": array\n}\n```",
+            "height": 460,
+            "width": 400
+          },
+          "id": "sticky_api_placeholders",
+          "name": "API Placeholders Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            240,
+            1080
+          ]
+        },
+        {
+          "parameters": {
+            "rule": {
+              "interval": [
+                {
+                  "field": "hours",
+                  "hoursInterval": 1
+                }
+              ]
+            },
+            "resume": "webhook",
+            "maxRetries": 3,
+            "retryInterval": 300
+          },
+          "id": "error_handler_combined",
+          "name": "Error Handler",
+          "type": "n8n-nodes-base.errorTrigger",
+          "typeVersion": 1,
+          "position": [
+            760,
+            1080
+          ]
+        },
+        {
+          "parameters": {
+            "authentication": "oAuth2",
+            "resource": "append",
+            "sheetId": "={{CREDENTIAL_GOOGLE_SHEETS}}/Error_Log",
+            "range": "A:H",
+            "options": {}
+          },
+          "id": "log_error_combined",
+          "name": "Log Error to Sheet",
+          "type": "n8n-nodes-base.googleSheets",
+          "typeVersion": 3,
+          "position": [
+            960,
+            1080
+          ],
+          "credentials": {
+            "googleSheetsOAuth2Api": {
+              "id": "{{CREDENTIAL_GOOGLE_SHEETS}}",
+              "name": "Google Sheets API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "url": "https://graph.microsoft.com/v1.0/teams/{{CREDENTIAL_TEAMS}}/channels/ops-alerts/messages",
+            "authentication": "genericCredentialType",
+            "genericAuthType": "oAuth2Api",
+            "sendBody": true,
+            "bodyParameters": {
+              "parameters": [
+                {
+                  "name": "body",
+                  "value": "={{ {\n  \"body\": {\n    \"content\": \"⚠️ Pipeline Error Alert\\n\\nWorkflow: Combined Pipeline\\nError: \" + $json.error.message + \"\\nNode: \" + $json.node.name + \"\\nTime: \" + new Date().toISOString() + \"\\n\\nLead Data: \" + JSON.stringify($json.inputData).substring(0, 200) + \"...\\n\\nAction Required: Review error log\"\n  }\n} }}"
+                }
+              ]
+            }
+          },
+          "id": "teams_error_alert",
+          "name": "Alert Ops Team",
+          "type": "n8n-nodes-base.httpRequest",
+          "typeVersion": 3,
+          "position": [
+            1160,
+            1080
+          ],
+          "credentials": {
+            "oAuth2Api": {
+              "id": "{{CREDENTIAL_TEAMS}}",
+              "name": "Microsoft Teams API"
+            }
+          }
+        },
+        {
+          "parameters": {
+            "content": "## Error Handling & Recovery\n\n**Error Types & Actions**:\n\n**Rate Limits (429)**:\n- Exponential backoff: 1m, 5m, 15m\n- Queue for later processing\n- Switch to backup provider if available\n\n**API Failures (5xx)**:\n- Retry 3x with delays\n- Log detailed error\n- Continue with partial data\n- Alert ops team if critical\n\n**Data Quality Issues**:\n- Invalid email → Human review queue\n- Missing LinkedIn → Alternative enrichment\n- No phone → Flag and proceed\n\n**Timeout Errors**:\n- Reduce batch size\n- Split into smaller chunks\n- Process synchronously\n\n**Recovery**:\n- All raw leads logged first\n- Can replay from raw leads sheet\n- Idempotent operations (upsert, not insert)\n- Canonical ID prevents duplicates",
+            "height": 440,
+            "width": 400
+          },
+          "id": "sticky_error_recovery",
+          "name": "Error Recovery Note",
+          "type": "n8n-nodes-base.stickyNote",
+          "typeVersion": 1,
+          "position": [
+            1360,
+            1080
+          ]
+        }
+      ],
+      "connections": {
+        "Unified Lead Webhook": {
+          "main": [
+            [
+              {
+                "node": "Webhook Response",
+                "type": "main",
+                "index": 0
+              },
+              {
+                "node": "Detect Lead Type",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Detect Lead Type": {
+          "main": [
+            [
+              {
+                "node": "Save to Unified Raw Leads",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Save to Unified Raw Leads": {
+          "main": [
+            [
+              {
+                "node": "Is Inbound?",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Is Inbound?": {
+          "main": [
+            [
+              {
+                "node": "Shared Enrichment Service",
+                "type": "main",
+                "index": 0
+              }
+            ],
+            [
+              {
+                "node": "Outbound Enrichment Service",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Shared Enrichment Service": {
+          "main": [
+            [
+              {
+                "node": "Validate Email (Shared)",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Outbound Enrichment Service": {
+          "main": [
+            [
+              {
+                "node": "Validate Email (Shared)",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Validate Email (Shared)": {
+          "main": [
+            [
+              {
+                "node": "Validate LinkedIn (Shared)",
+                "type": "main",
+                "index": 0
+              },
+              {
+                "node": "Email Invalid?",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Validate LinkedIn (Shared)": {
+          "main": [
+            [
+              {
+                "node": "LinkedIn Missing?",
+                "type": "main",
+                "index": 0
+              },
+              {
+                "node": "Centralized Scoring Engine",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Email Invalid?": {
+          "main": [
+            [
+              {
+                "node": "Send to Human Review",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "LinkedIn Missing?": {
+          "main": [
+            [
+              {
+                "node": "Alternative Enrichment (Clearbit)",
+                "type": "main",
+                "index": 0
+              },
+              {
+                "node": "Flag LinkedIn Missing",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Alternative Enrichment (Clearbit)": {
+          "main": [
+            [
+              {
+                "node": "Centralized Scoring Engine",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Flag LinkedIn Missing": {
+          "main": [
+            [
+              {
+                "node": "Centralized Scoring Engine",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Centralized Scoring Engine": {
+          "main": [
+            [
+              {
+                "node": "Canonicalization & Dedupe Service",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Canonicalization & Dedupe Service": {
+          "main": [
+            [
+              {
+                "node": "Lookup Canonical Record",
+                "type": "main",
+                "index": 0
+              },
+              {
+                "node": "Lookup in HubSpot",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Lookup Canonical Record": {
+          "main": [
+            [
+              {
+                "node": "Is New Record?",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Lookup in HubSpot": {
+          "main": [
+            [
+              {
+                "node": "Is New Record?",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Is New Record?": {
+          "main": [
+            [
+              {
+                "node": "Upsert to HubSpot",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Upsert to HubSpot": {
+          "main": [
+            [
+              {
+                "node": "Save to Enriched Leads Sheet",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Save to Enriched Leads Sheet": {
+          "main": [
+            [
+              {
+                "node": "Is MQL?",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Is MQL?": {
+          "main": [
+            [
+              {
+                "node": "Route Teams Notification",
+                "type": "main",
+                "index": 0
+              }
+            ],
+            [
+              {
+                "node": "Add to Nurture Queue",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Route Teams Notification": {
+          "main": [
+            [
+              {
+                "node": "Add to MQL Queue",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Add to MQL Queue": {
+          "main": [
+            [
+              {
+                "node": "Inbound MQL?",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Inbound MQL?": {
+          "main": [
+            [
+              {
+                "node": "Lemlist Inbound Sequence",
+                "type": "main",
+                "index": 0
+              }
+            ],
+            [
+              {
+                "node": "Lemlist Outbound Sequence",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Lemlist Inbound Sequence": {
+          "main": [
+            [
+              {
+                "node": "Monitor Workflow Execution",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Lemlist Outbound Sequence": {
+          "main": [
+            [
+              {
+                "node": "Monitor Workflow Execution",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Add to Nurture Queue": {
+          "main": [
+            [
+              {
+                "node": "Send Nurture Email",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Send Nurture Email": {
+          "main": [
+            [
+              {
+                "node": "Monitor Workflow Execution",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Monitor Workflow Execution": {
+          "main": [
+            [
+              {
+                "node": "Log to Workflow Sheet",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Log to Workflow Sheet": {
+          "main": [
+            [
+              {
+                "node": "Send Daily Summary to Teams",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Error Handler": {
+          "main": [
+            [
+              {
+                "node": "Log Error to Sheet",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        },
+        "Log Error to Sheet": {
+          "main": [
+            [
+              {
+                "node": "Alert Ops Team",
+                "type": "main",
+                "index": 0
+              }
+            ]
+          ]
+        }
+      },
+      "active": false,
+      "settings": {
+        "executionOrder": "v1"
+      },
+      "versionId": "1",
+      "id": "combined_pipeline_001",
+      "tags": [
+        {
+          "name": "GTM",
+          "id": "gtm_tag"
+        },
+        {
+          "name": "Combined",
+          "id": "combined_tag"
+        },
+        {
+          "name": "Production",
+          "id": "production_tag"
+        }
+      ]
+    }
+  ],
+  "tags": [
+    {
+      "id": "gtm_tag",
+      "name": "GTM"
+    },
+    {
+      "id": "inbound_tag",
+      "name": "Inbound"
+    },
+    {
+      "id": "outbound_tag",
+      "name": "Outbound"
+    },
+    {
+      "id": "combined_tag",
+      "name": "Combined"
+    },
+    {
+      "id": "production_tag",
+      "name": "Production"
+    }
+  ]
+}
